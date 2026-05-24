@@ -1,0 +1,24 @@
+[toolchain]
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+meridian = "DQgnoMXTD6Ebo7cgie6hpNjnVCtTnLVfjPcFc4JQZS19"
+
+[programs.devnet]
+meridian = "DQgnoMXTD6Ebo7cgie6hpNjnVCtTnLVfjPcFc4JQZS19"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "pnpm exec mocha -t 1000000 tests/anchor/**/*.test.ts"
+
+[test.validator]
+url = "http://localhost:8899"

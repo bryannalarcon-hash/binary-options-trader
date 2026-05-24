@@ -1,0 +1,782 @@
+{
+  "address": "DQgnoMXTD6Ebo7cgie6hpNjnVCtTnLVfjPcFc4JQZS19",
+  "metadata": {
+    "name": "meridian",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Meridian - binary options prediction market on Solana"
+  },
+  "instructions": [
+    {
+      "name": "initialize_config",
+      "discriminator": [208, 127, 21, 1, 194, 190, 196, 70],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "payer", "writable": true, "signer": true },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
+      ],
+      "args": [
+        { "name": "admin", "type": "pubkey" },
+        { "name": "fee_destination", "type": "pubkey" },
+        { "name": "oracle_authority", "type": "pubkey" },
+        { "name": "usdc_mint", "type": "pubkey" }
+      ]
+    },
+    {
+      "name": "create_strike_market",
+      "discriminator": [21, 162, 50, 119, 68, 218, 221, 35],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [109, 97, 114, 107, 101, 116] },
+              { "kind": "arg", "path": "ticker" },
+              { "kind": "arg", "path": "strike" },
+              { "kind": "arg", "path": "expiry_ts" }
+            ]
+          }
+        },
+        {
+          "name": "yes_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [121, 101, 115, 95, 109, 105, 110, 116] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        {
+          "name": "no_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [110, 111, 95, 109, 105, 110, 116] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        { "name": "usdc_mint" },
+        { "name": "vault", "writable": true },
+        {
+          "name": "oracle",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [111, 114, 97, 99, 108, 101] },
+              { "kind": "arg", "path": "ticker" }
+            ]
+          }
+        },
+        { "name": "payer", "writable": true, "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { "name": "associated_token_program", "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
+      ],
+      "args": [
+        { "name": "ticker", "type": "string" },
+        { "name": "strike", "type": "u64" },
+        { "name": "expiry_ts", "type": "i64" }
+      ]
+    },
+    {
+      "name": "init_market_books",
+      "discriminator": [138, 76, 177, 24, 100, 46, 78, 85],
+      "accounts": [
+        { "name": "market" },
+        { "name": "yes_mint" },
+        { "name": "usdc_mint" },
+        {
+          "name": "orderbook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [111, 114, 100, 101, 114, 98, 111, 111, 107] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        {
+          "name": "usdc_escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [117, 115, 100, 99, 95, 101, 115, 99, 114, 111, 119] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        {
+          "name": "yes_escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [121, 101, 115, 95, 101, 115, 99, 114, 111, 119] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        { "name": "payer", "writable": true, "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
+      ],
+      "args": []
+    },
+    {
+      "name": "add_strike",
+      "discriminator": [226, 190, 94, 4, 5, 106, 15, 120],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "admin", "writable": true, "signer": true },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [109, 97, 114, 107, 101, 116] },
+              { "kind": "arg", "path": "ticker" },
+              { "kind": "arg", "path": "strike" },
+              { "kind": "arg", "path": "expiry_ts" }
+            ]
+          }
+        },
+        {
+          "name": "yes_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [121, 101, 115, 95, 109, 105, 110, 116] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        {
+          "name": "no_mint",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [110, 111, 95, 109, 105, 110, 116] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        { "name": "usdc_mint" },
+        { "name": "vault", "writable": true },
+        {
+          "name": "oracle",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [111, 114, 97, 99, 108, 101] },
+              { "kind": "arg", "path": "ticker" }
+            ]
+          }
+        },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { "name": "associated_token_program", "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL" },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
+      ],
+      "args": [
+        { "name": "ticker", "type": "string" },
+        { "name": "strike", "type": "u64" },
+        { "name": "expiry_ts", "type": "i64" }
+      ]
+    },
+    {
+      "name": "pause",
+      "discriminator": [211, 22, 221, 251, 74, 121, 193, 47],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "admin", "signer": true }
+      ],
+      "args": [
+        { "name": "paused", "type": "bool" }
+      ]
+    },
+    {
+      "name": "mint_pair",
+      "discriminator": [19, 149, 94, 110, 181, 186, 33, 107],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "market", "writable": true },
+        { "name": "yes_mint", "writable": true },
+        { "name": "no_mint", "writable": true },
+        { "name": "usdc_mint" },
+        { "name": "vault", "writable": true },
+        { "name": "user_usdc", "writable": true },
+        { "name": "user_yes", "writable": true },
+        { "name": "user_no", "writable": true },
+        { "name": "user", "writable": true, "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
+      ],
+      "args": [
+        { "name": "amount_pairs", "type": "u64" }
+      ]
+    },
+    {
+      "name": "redeem_pair",
+      "discriminator": [157, 102, 125, 192, 31, 48, 165, 114],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "market", "writable": true },
+        { "name": "yes_mint", "writable": true },
+        { "name": "no_mint", "writable": true },
+        { "name": "usdc_mint" },
+        { "name": "vault", "writable": true },
+        { "name": "user_usdc", "writable": true },
+        { "name": "user_yes", "writable": true },
+        { "name": "user_no", "writable": true },
+        { "name": "user", "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
+      ],
+      "args": [
+        { "name": "amount_pairs", "type": "u64" }
+      ]
+    },
+    {
+      "name": "redeem",
+      "discriminator": [184, 12, 86, 149, 70, 196, 97, 225],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "yes_mint", "writable": true },
+        { "name": "no_mint", "writable": true },
+        { "name": "usdc_mint" },
+        { "name": "vault", "writable": true },
+        { "name": "user_usdc", "writable": true },
+        { "name": "user_yes", "writable": true },
+        { "name": "user_no", "writable": true },
+        { "name": "user", "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
+      ],
+      "args": [
+        { "name": "side", "type": { "defined": { "name": "TokenSide" } } },
+        { "name": "amount", "type": "u64" }
+      ]
+    },
+    {
+      "name": "place_order",
+      "discriminator": [51, 194, 155, 175, 109, 130, 96, 106],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "market" },
+        {
+          "name": "orderbook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [111, 114, 100, 101, 114, 98, 111, 111, 107] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        { "name": "yes_mint" },
+        { "name": "usdc_mint" },
+        { "name": "user_usdc", "writable": true },
+        { "name": "user_yes", "writable": true },
+        { "name": "counterparty_usdc", "writable": true },
+        { "name": "counterparty_yes", "writable": true },
+        {
+          "name": "usdc_escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [117, 115, 100, 99, 95, 101, 115, 99, 114, 111, 119] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        {
+          "name": "yes_escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [121, 101, 115, 95, 101, 115, 99, 114, 111, 119] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        { "name": "user", "writable": true, "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { "name": "system_program", "address": "11111111111111111111111111111111" },
+        { "name": "rent", "address": "SysvarRent111111111111111111111111111111111" }
+      ],
+      "args": [
+        { "name": "side", "type": { "defined": { "name": "OrderSide" } } },
+        { "name": "price", "type": "u16" },
+        { "name": "size", "type": "u64" }
+      ]
+    },
+    {
+      "name": "cancel_order",
+      "discriminator": [95, 129, 237, 240, 8, 49, 223, 132],
+      "accounts": [
+        { "name": "market" },
+        {
+          "name": "orderbook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [111, 114, 100, 101, 114, 98, 111, 111, 107] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        { "name": "yes_mint" },
+        { "name": "usdc_mint" },
+        { "name": "user_usdc", "writable": true },
+        { "name": "user_yes", "writable": true },
+        {
+          "name": "usdc_escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [117, 115, 100, 99, 95, 101, 115, 99, 114, 111, 119] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        {
+          "name": "yes_escrow",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [121, 101, 115, 95, 101, 115, 99, 114, 111, 119] },
+              { "kind": "account", "path": "market" }
+            ]
+          }
+        },
+        { "name": "user", "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
+      ],
+      "args": [
+        { "name": "side", "type": { "defined": { "name": "OrderSide" } } },
+        { "name": "index", "type": "u8" }
+      ]
+    },
+    {
+      "name": "settle_market",
+      "discriminator": [193, 153, 95, 216, 166, 6, 144, 217],
+      "accounts": [
+        { "name": "market", "writable": true },
+        { "name": "oracle" },
+        { "name": "caller", "signer": true }
+      ],
+      "args": []
+    },
+    {
+      "name": "admin_settle_override",
+      "discriminator": [92, 131, 189, 52, 161, 70, 203, 95],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "market", "writable": true },
+        { "name": "admin", "signer": true }
+      ],
+      "args": [
+        { "name": "manual_price", "type": "u64" }
+      ]
+    },
+    {
+      "name": "update_oracle",
+      "discriminator": [112, 41, 209, 18, 248, 226, 252, 188],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [99, 111, 110, 102, 105, 103] }
+            ]
+          }
+        },
+        { "name": "oracle_authority", "writable": true, "signer": true },
+        {
+          "name": "oracle",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              { "kind": "const", "value": [111, 114, 97, 99, 108, 101] },
+              { "kind": "arg", "path": "ticker" }
+            ]
+          }
+        },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
+      ],
+      "args": [
+        { "name": "ticker", "type": "string" },
+        { "name": "price", "type": "i64" },
+        { "name": "conf", "type": "u64" },
+        { "name": "publish_time", "type": "i64" },
+        { "name": "expo", "type": "i32" }
+      ]
+    }
+  ],
+  "accounts": [
+    { "name": "Config", "discriminator": [155, 12, 170, 224, 30, 250, 204, 130] },
+    { "name": "Market", "discriminator": [219, 190, 213, 55, 0, 227, 198, 154] },
+    { "name": "MockOracle", "discriminator": [208, 74, 71, 99, 160, 22, 158, 240] },
+    { "name": "OrderBook", "discriminator": [55, 230, 125, 218, 149, 39, 65, 248] }
+  ],
+  "events": [
+    { "name": "ConfigInitialized", "discriminator": [181, 49, 200, 156, 19, 167, 178, 91] },
+    { "name": "OracleUpdated", "discriminator": [138, 9, 51, 219, 228, 198, 11, 147] },
+    { "name": "MarketCreated", "discriminator": [88, 184, 130, 231, 226, 84, 6, 58] },
+    { "name": "PairMinted", "discriminator": [24, 66, 202, 249, 156, 196, 33, 51] },
+    { "name": "PairRedeemed", "discriminator": [64, 174, 48, 224, 13, 192, 139, 204] },
+    { "name": "OrderPlaced", "discriminator": [96, 130, 204, 234, 169, 219, 216, 227] },
+    { "name": "OrderMatched", "discriminator": [211, 0, 178, 174, 61, 245, 45, 250] },
+    { "name": "OrderCancelled", "discriminator": [108, 56, 128, 68, 168, 113, 168, 239] },
+    { "name": "MarketSettled", "discriminator": [237, 212, 22, 175, 201, 117, 215, 99] },
+    { "name": "Redeemed", "discriminator": [14, 29, 183, 71, 31, 165, 107, 38] },
+    { "name": "Paused", "discriminator": [172, 248, 5, 253, 49, 255, 255, 232] },
+    { "name": "Unpaused", "discriminator": [156, 150, 47, 174, 120, 216, 93, 117] }
+  ],
+  "errors": [
+    { "code": 6000, "name": "Paused", "msg": "Program is paused by admin" },
+    { "code": 6001, "name": "AlreadySettled", "msg": "Market is already settled" },
+    { "code": 6002, "name": "NotSettled", "msg": "Market is not yet settled" },
+    { "code": 6003, "name": "ZeroAmount", "msg": "Amount must be greater than zero" },
+    { "code": 6004, "name": "MathOverflow", "msg": "Arithmetic overflow or underflow" },
+    { "code": 6005, "name": "InvalidStrike", "msg": "Strike price is invalid" },
+    { "code": 6006, "name": "OraclesStale", "msg": "Oracle price is too stale to use" },
+    { "code": 6007, "name": "OracleConfidenceWide", "msg": "Oracle confidence band is too wide" },
+    { "code": 6008, "name": "AdminRequired", "msg": "This instruction requires the admin signer" },
+    { "code": 6009, "name": "TimeGateNotElapsed", "msg": "Time gate has not elapsed (e.g. settle before expiry, or override before 1h delay)" },
+    { "code": 6010, "name": "OrderBookFullForSide", "msg": "Order book is full for this side" },
+    { "code": 6011, "name": "OrderNotFound", "msg": "Order not found at given index" },
+    { "code": 6012, "name": "InvalidOrderIndex", "msg": "Order index out of range" },
+    { "code": 6013, "name": "InsufficientFunds", "msg": "Insufficient funds in account or vault" },
+    { "code": 6014, "name": "NotEnoughBalance", "msg": "Insufficient balance for requested operation" },
+    { "code": 6015, "name": "InvalidPrice", "msg": "Invalid price (must be 1..=99 cents on a $1.00 binary)" },
+    { "code": 6016, "name": "PriceOutOfRange", "msg": "Price out of range (must be 1..=99 cents)" },
+    { "code": 6017, "name": "SizeMustBeNonZero", "msg": "Size must be non-zero" },
+    { "code": 6018, "name": "NotOrderOwner", "msg": "Caller is not the order owner" },
+    { "code": 6019, "name": "InvalidTicker", "msg": "Ticker string is invalid or too long" },
+    { "code": 6020, "name": "InvalidOracleAuthority", "msg": "Oracle authority mismatch" },
+    { "code": 6021, "name": "InvalidRedeemSide", "msg": "Settlement outcome mismatch (token side cannot redeem against current outcome)" },
+    { "code": 6022, "name": "NotWinningSide", "msg": "Settlement outcome was not the winning side" },
+    { "code": 6023, "name": "OracleNegativePrice", "msg": "Oracle price is negative" },
+    { "code": 6024, "name": "OracleInvalidExpo", "msg": "Oracle exponent invalid for cents conversion" },
+    { "code": 6025, "name": "OrderBookFull", "msg": "Order book is full" }
+  ],
+  "types": [
+    {
+      "name": "TokenSide",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Yes" },
+          { "name": "No" }
+        ]
+      }
+    },
+    {
+      "name": "OrderSide",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Bid" },
+          { "name": "Ask" }
+        ]
+      }
+    },
+    {
+      "name": "Outcome",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          { "name": "Yes" },
+          { "name": "No" }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "admin", "type": "pubkey" },
+          { "name": "fee_destination", "type": "pubkey" },
+          { "name": "oracle_authority", "type": "pubkey" },
+          { "name": "usdc_mint", "type": "pubkey" },
+          { "name": "paused", "type": "bool" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "Market",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "ticker", "type": "string" },
+          { "name": "strike", "type": "u64" },
+          { "name": "expiry_ts", "type": "i64" },
+          { "name": "yes_mint", "type": "pubkey" },
+          { "name": "no_mint", "type": "pubkey" },
+          { "name": "vault", "type": "pubkey" },
+          { "name": "usdc_mint", "type": "pubkey" },
+          { "name": "oracle", "type": "pubkey" },
+          { "name": "settled", "type": "bool" },
+          { "name": "outcome", "type": { "option": { "defined": { "name": "Outcome" } } } },
+          { "name": "settlement_ts", "type": { "option": "i64" } },
+          { "name": "settlement_price", "type": { "option": "u64" } },
+          { "name": "total_pairs_minted", "type": "u64" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "MockOracle",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "ticker", "type": "string" },
+          { "name": "price", "type": "i64" },
+          { "name": "conf", "type": "u64" },
+          { "name": "publish_time", "type": "i64" },
+          { "name": "expo", "type": "i32" },
+          { "name": "last_writer", "type": "pubkey" },
+          { "name": "bump", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "Order",
+      "serialization": "bytemuck",
+      "repr": { "kind": "c" },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner", "type": "pubkey" },
+          { "name": "timestamp", "type": "i64" },
+          { "name": "size", "type": "u64" },
+          { "name": "price", "type": "u16" },
+          { "name": "_padding", "type": { "array": ["u8", 6] } }
+        ]
+      }
+    },
+    {
+      "name": "OrderBook",
+      "serialization": "bytemuck",
+      "repr": { "kind": "c" },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "market", "type": "pubkey" },
+          { "name": "bump", "type": "u8" },
+          { "name": "_padding", "type": { "array": ["u8", 7] } },
+          { "name": "bids", "type": { "array": [{ "defined": { "name": "Order" } }, 16] } },
+          { "name": "asks", "type": { "array": [{ "defined": { "name": "Order" } }, 16] } }
+        ]
+      }
+    },
+    {
+      "name": "ConfigInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "admin", "type": "pubkey" },
+          { "name": "fee_destination", "type": "pubkey" },
+          { "name": "oracle_authority", "type": "pubkey" },
+          { "name": "usdc_mint", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "OracleUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "ticker", "type": "string" },
+          { "name": "price", "type": "i64" },
+          { "name": "conf", "type": "u64" },
+          { "name": "publish_time", "type": "i64" },
+          { "name": "expo", "type": "i32" }
+        ]
+      }
+    },
+    {
+      "name": "MarketCreated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "market", "type": "pubkey" },
+          { "name": "ticker", "type": "string" },
+          { "name": "strike", "type": "u64" },
+          { "name": "expiry_ts", "type": "i64" },
+          { "name": "yes_mint", "type": "pubkey" },
+          { "name": "no_mint", "type": "pubkey" },
+          { "name": "vault", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "PairMinted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "user", "type": "pubkey" },
+          { "name": "market", "type": "pubkey" },
+          { "name": "amount_pairs", "type": "u64" },
+          { "name": "total_pairs_minted", "type": "u64" }
+        ]
+      }
+    },
+    {
+      "name": "PairRedeemed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "user", "type": "pubkey" },
+          { "name": "market", "type": "pubkey" },
+          { "name": "amount_pairs", "type": "u64" },
+          { "name": "total_pairs_minted", "type": "u64" }
+        ]
+      }
+    },
+    {
+      "name": "OrderPlaced",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "user", "type": "pubkey" },
+          { "name": "market", "type": "pubkey" },
+          { "name": "side", "type": "u8" },
+          { "name": "price", "type": "u16" },
+          { "name": "size", "type": "u64" },
+          { "name": "index", "type": "u8" }
+        ]
+      }
+    },
+    {
+      "name": "OrderMatched",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "taker", "type": "pubkey" },
+          { "name": "maker", "type": "pubkey" },
+          { "name": "market", "type": "pubkey" },
+          { "name": "taker_side", "type": "u8" },
+          { "name": "price", "type": "u16" },
+          { "name": "size", "type": "u64" }
+        ]
+      }
+    },
+    {
+      "name": "OrderCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "user", "type": "pubkey" },
+          { "name": "market", "type": "pubkey" },
+          { "name": "side", "type": "u8" },
+          { "name": "index", "type": "u8" },
+          { "name": "returned_size", "type": "u64" },
+          { "name": "returned_price", "type": "u16" }
+        ]
+      }
+    },
+    {
+      "name": "MarketSettled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "market", "type": "pubkey" },
+          { "name": "outcome", "type": "u8" },
+          { "name": "settlement_price_cents", "type": "u64" },
+          { "name": "strike_cents", "type": "u64" },
+          { "name": "settlement_ts", "type": "i64" }
+        ]
+      }
+    },
+    {
+      "name": "Redeemed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "user", "type": "pubkey" },
+          { "name": "market", "type": "pubkey" },
+          { "name": "side", "type": "u8" },
+          { "name": "amount_burned", "type": "u64" },
+          { "name": "usdc_paid", "type": "u64" }
+        ]
+      }
+    },
+    {
+      "name": "Paused",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "admin", "type": "pubkey" }
+        ]
+      }
+    },
+    {
+      "name": "Unpaused",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "admin", "type": "pubkey" }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "meridian-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Meridian — binary-options prediction market on Solana (monorepo root)",
+  "scripts": {
+    "dev": "concurrently -n app,automation -c blue,magenta \"pnpm --filter app dev\" \"pnpm --filter automation dev\"",
+    "build": "pnpm --filter @meridian/types build && pnpm --filter app build && pnpm --filter automation build",
+    "test": "anchor test",
+    "test:e2e": "pnpm --filter tests test:e2e",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean && rm -rf target .anchor"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

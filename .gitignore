@@ -1,0 +1,37 @@
+# Secrets and keypairs
+keys/
+.env
+.env.local
+
+# Local validator runtime artifacts
+.test-validator.log
+.test-validator.pid
+test-ledger/
+
+# Build outputs (added pre-emptively for when Anchor / Next.js show up)
+node_modules/
+target/
+.anchor/
+.next/
+dist/
+build/
+
+# Process artifacts
+.automation.log
+.automation.pid
+.app.log
+.app.pid
+
+# IDE
+.vscode/
+.idea/
+
+# Tool / agent state — not meant for source control
+.claude/
+.claude-flow/
+.bootstrap.log
+
+# Test results (Playwright traces, videos, screenshots)
+tests/test-results/
+playwright-report/
+test-results/

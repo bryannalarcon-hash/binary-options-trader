@@ -1,0 +1,9 @@
+[toolchain]
+# Anchor 0.30.1 ships with Solana platform-tools that target rust 1.79; however
+# Cargo 1.79 can't *parse* manifests from many transitive crates that have
+# adopted edition2024 (hashbrown 0.17, wit-bindgen 0.57, constant_time_eq 0.4,
+# etc.). We use a newer stable on the host so `cargo metadata` succeeds, while
+# `cargo build-sbf` still uses the bundled Solana toolchain underneath.
+channel = "1.82.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
