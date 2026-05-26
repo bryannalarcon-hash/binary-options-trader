@@ -1,9 +1,18 @@
 import type * as http from "http";
 
-import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  LAMPORTS_PER_SOL,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
 import {
   getOrCreateAssociatedTokenAccount,
+  getMint,
   mintTo,
+  transfer,
 } from "@solana/spl-token";
 
 import { env } from "./env";
@@ -13,6 +22,7 @@ import { ctx } from "./logger";
 const log = ctx("faucet");
 
 const SOL_AIRDROP = 2 * LAMPORTS_PER_SOL;
+const SOL_TOPUP = 0.05 * LAMPORTS_PER_SOL; // admin→demo fallback when airdrop is throttled
 const USDC_AMOUNT = 1_000 * 1_000_000; // 1,000 USDC (6 decimals)
 const COOLDOWN_MS = 20_000;
 const lastFundedAt = new Map<string, number>();
@@ -88,31 +98,58 @@ export async function handleFaucet(
     const admin = loadKeypair(env.adminKeypairPath);
     const mint = new PublicKey(env.usdcMint);
 
-    // 1) SOL for fees (airdrop works on localnet/devnet).
+    // 1) SOL for fees. Airdrop on localnet/devnet; if the devnet airdrop is
+    //    rate-limited, fall back to a small transfer from the admin wallet so
+    //    the demo wallet can always cover transaction fees.
     let solSig: string | null = null;
     try {
       solSig = await connection.requestAirdrop(address, SOL_AIRDROP);
       await connection.confirmTransaction(solSig, "confirmed");
     } catch (err) {
-      // Devnet airdrops are rate-limited; not fatal — the user may already have SOL.
-      log.warn({ err: errMsg(err) }, "SOL airdrop failed (continuing to USDC mint)");
+      log.warn({ err: errMsg(err) }, "SOL airdrop failed — transferring SOL from admin");
+      try {
+        const tx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: admin.publicKey,
+            toPubkey: address,
+            lamports: SOL_TOPUP,
+          }),
+        );
+        solSig = await sendAndConfirmTransaction(connection, tx, [admin]);
+      } catch (e) {
+        log.warn({ err: errMsg(e) }, "admin SOL transfer failed (continuing to USDC)");
+      }
     }
 
-    // 2) Test USDC via mint authority (admin).
+    // 2) Test USDC. If the admin keypair is the mint authority (localnet's own
+    //    mint), mint fresh; otherwise (devnet's Circle USDC) transfer from the
+    //    admin's pre-funded USDC stash.
     const ata = await getOrCreateAssociatedTokenAccount(
       connection,
       admin,
       mint,
       address,
     );
-    const usdcSig = await mintTo(
-      connection,
-      admin,
-      mint,
-      ata.address,
-      admin,
-      USDC_AMOUNT,
-    );
+    const mintInfo = await getMint(connection, mint);
+    let usdcSig: string;
+    if (mintInfo.mintAuthority && mintInfo.mintAuthority.equals(admin.publicKey)) {
+      usdcSig = await mintTo(connection, admin, mint, ata.address, admin, USDC_AMOUNT);
+    } else {
+      const adminAta = await getOrCreateAssociatedTokenAccount(
+        connection,
+        admin,
+        mint,
+        admin.publicKey,
+      );
+      usdcSig = await transfer(
+        connection,
+        admin,
+        adminAta.address,
+        ata.address,
+        admin,
+        USDC_AMOUNT,
+      );
+    }
 
     log.info({ address: key }, "faucet funded demo wallet");
     send(res, 200, {

@@ -41,17 +41,17 @@ export function WalletProviderWrapper({ children }: { children: ReactNode }) {
   // config-admin keypair (localnet-only, via /api/admin-key) so operators can
   // run oracle/settle/create-market actions in the browser. Only on devnet/
   // localnet (env.faucetUrl set) — never a keys-in-browser wallet on mainnet.
-  const wallets = useMemo(
-    () =>
-      env.faucetUrl
-        ? [
-            new BurnerWalletAdapter(1),
-            new BurnerWalletAdapter(2),
-            new AdminWalletAdapter(),
-          ]
-        : [],
-    [],
-  );
+  const wallets = useMemo(() => {
+    if (!env.faucetUrl) return [];
+    const isLocalnet = endpoint.includes("localhost") || endpoint.includes("127.0.0.1");
+    // Burner "Demo Wallet 1/2" wherever a faucet is configured (localnet + devnet).
+    // The "Admin (demo)" wallet fetches the config-admin key from /api/admin-key,
+    // which is hard-gated to localnet — so only register it there (it would just
+    // 403 on a devnet/public deploy).
+    return isLocalnet
+      ? [new BurnerWalletAdapter(1), new BurnerWalletAdapter(2), new AdminWalletAdapter()]
+      : [new BurnerWalletAdapter(1), new BurnerWalletAdapter(2)];
+  }, [endpoint]);
 
   const onError = useCallback((error: WalletError) => {
     // WalletNotSelected (a transient select→connect race) and user-rejection are
