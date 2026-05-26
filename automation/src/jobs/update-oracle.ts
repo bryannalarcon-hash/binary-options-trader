@@ -2,7 +2,7 @@ import { BN } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 
 import { env } from "../env";
-import { buildAnchorContext, isProgramDeployed } from "../lib/anchor";
+import { buildAnchorContext, getAnchorContext, isProgramDeployed } from "../lib/anchor";
 import { fetchMag7Prices, type HermesPrice } from "../lib/hermes";
 import { configPda, oraclePda } from "../lib/pdas";
 import { MAG7_TICKERS } from "../lib/tickers";
@@ -32,7 +32,7 @@ export async function runOracleUpdaterOnce(): Promise<OracleUpdateResult[]> {
   try {
     // Oracle authority signs — for v1 this is the admin keypair (per spec:
     // "Call update_oracle... using oracle_authority (the admin keypair for v1)").
-    anchor = buildAnchorContext(env.adminKeypairPath);
+    anchor = getAnchorContext(env.adminKeypairPath);
   } catch (err) {
     log.warn(
       { err: errMsg(err) },

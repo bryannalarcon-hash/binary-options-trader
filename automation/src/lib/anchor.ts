@@ -145,6 +145,32 @@ export function buildAnchorContext(keypairPath: string): AnchorContext {
   return { connection, wallet, provider, program, programId };
 }
 
+// A `Connection` owns a WebSocket (for signature confirmations). Building a new
+// one per job pass leaks sockets: the old WS is never closed, keeps retrying its
+// handshake, and on a throttled RPC (Helius free tier) that becomes a 429
+// reconnect storm that eventually crashes the process. Build ONE context per
+// signer and reuse it for the life of the service. Keyed by keypair path because
+// different jobs sign with different keypairs (oracle=admin, morning/settle=automation).
+const contextCache = new Map<string, AnchorContext>();
+
+/**
+ * Return a cached {@link AnchorContext} for `keypairPath`, building it once on
+ * first use. Reusing the same `Connection`/WebSocket across cron passes is what
+ * keeps us under the RPC's WS connection limit.
+ */
+export function getAnchorContext(keypairPath: string): AnchorContext {
+  const cached = contextCache.get(keypairPath);
+  if (cached) return cached;
+  const ctx = buildAnchorContext(keypairPath);
+  contextCache.set(keypairPath, ctx);
+  return ctx;
+}
+
+/** Clear the context cache (used by tests). */
+export function resetAnchorContextCache(): void {
+  contextCache.clear();
+}
+
 /** Returns true if the program is deployed at `programId` on the current RPC. */
 export async function isProgramDeployed(
   connection: Connection,

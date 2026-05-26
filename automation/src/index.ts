@@ -17,8 +17,28 @@ import { ctx, logger } from "./logger";
  *
  * Also serves a JSON /health endpoint on AUTOMATION_HEALTH_PORT (default 3001).
  */
+/**
+ * Keep the service alive through transient RPC failures. The dominant crash
+ * mode is a 429 ("rate limited") surfacing from web3.js's WebSocket
+ * confirmation path as an *unhandled rejection* — which Node ≥15 turns into a
+ * process exit, so Railway restart-loops. These are transient and the next
+ * cron pass recovers on its own, so we log and keep running rather than die.
+ * (Each cron job already try/catches its own awaited errors via `runJob`; this
+ * only catches the ones that escape an awaited scope.)
+ */
+export function installGlobalErrorHandlers(): void {
+  process.on("unhandledRejection", (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    logger.error({ err: msg }, "unhandledRejection — staying alive (likely transient RPC/WS error)");
+  });
+  process.on("uncaughtException", (err) => {
+    logger.error({ err: err.message }, "uncaughtException — staying alive (likely transient RPC/WS error)");
+  });
+}
+
 async function main(): Promise<void> {
   const log = ctx("index");
+  installGlobalErrorHandlers();
   log.info(
     {
       cluster: env.cluster,
@@ -93,7 +113,9 @@ async function runJob<T>(
   }
 }
 
-main().catch((err) => {
-  logger.fatal({ err: err instanceof Error ? err.message : String(err) }, "automation service crashed");
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    logger.fatal({ err: err instanceof Error ? err.message : String(err) }, "automation service crashed");
+    process.exit(1);
+  });
+}

@@ -84,7 +84,7 @@ export const env = {
   oracleMaxStalenessSeconds: num("ORACLE_MAX_STALENESS_SECONDS", 30),
   oracleMaxConfidenceRatio: num("ORACLE_MAX_CONFIDENCE_RATIO", 0.005),
   pythHermesUrl: process.env.PYTH_HERMES_URL || "https://hermes.pyth.network",
-  oracleUpdateIntervalSeconds: num("ORACLE_UPDATE_INTERVAL_SECONDS", 30),
+  oracleUpdateIntervalSeconds: num("ORACLE_UPDATE_INTERVAL_SECONDS", 60),
   pythFeeds: {
     AAPL: process.env.PYTH_FEED_AAPL || "",
     MSFT: process.env.PYTH_FEED_MSFT || "",

@@ -105,7 +105,8 @@ MERIDIAN_RUN_HARNESS_SUITES=1 ./scripts/run-anchor-tests.sh edge
 | **Core unit/integration** | `tests/anchor/meridian.test.ts` | **39** | 0 | 0 |
 | Edge-cases (math-only)     | `tests/anchor/edge-cases.test.ts` | **3** | 16 | 0 |
 | Integration (math-only + T-IT-06) | `tests/anchor/integration.test.ts` | **2** | 7 | 0 |
-| **Total (green run)**      | — | **44** | 23 | **0** |
+| Automation regression (`node:test`) | `automation/src/lib/anchor.test.ts` | **2** | 0 | 0 |
+| **Total (green run)**      | — | **46** | 23 | **0** |
 
 - The 39 core tests cover every one of the 16 program instructions, plus all
   PRD-listed edge/error paths (zero amount, out-of-range price, paused, stale
@@ -116,6 +117,14 @@ MERIDIAN_RUN_HARNESS_SUITES=1 ./scripts/run-anchor-tests.sh edge
 - **T-IT-06 invariant fuzz (Yes + No payout == \$1.00 over 1000 prices):
   PASSING.** It is math-only (`expectedPayouts()`), independent of the validator,
   and runs unconditionally.
+- **Automation crash-loop regression (`automation/src/lib/anchor.test.ts`, run
+  `cd automation && pnpm test`).** Guards the 2026-05-26 Railway crash: the
+  oracle/settle/morning jobs built a new `Connection` (and WebSocket) every cron
+  pass, leaking sockets that retried against a throttled RPC until a 429 WS storm
+  crashed the process. Test 1 asserts `getAnchorContext` reuses one `Connection`
+  per signer (no per-pass WS); test 2 asserts a global `unhandledRejection`
+  handler is installed so a stray 429 logs instead of exiting. Offline (no
+  network/validator) — constructs Anchor objects only.
 
 ---
 

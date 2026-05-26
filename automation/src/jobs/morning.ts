@@ -9,7 +9,7 @@ import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import { isNyseTradingDay } from "../calendar";
 import { env } from "../env";
 import { sendAlert } from "../lib/alerts";
-import { buildAnchorContext, isProgramDeployed } from "../lib/anchor";
+import { buildAnchorContext, getAnchorContext, isProgramDeployed } from "../lib/anchor";
 import { todayExpiryTsSeconds } from "../lib/expiry";
 import { fetchMag7Prices } from "../lib/hermes";
 import {
@@ -76,7 +76,7 @@ export async function runMorningJob(): Promise<MorningResult[]> {
 
   let anchor;
   try {
-    anchor = buildAnchorContext(env.automationKeypairPath);
+    anchor = getAnchorContext(env.automationKeypairPath);
   } catch (err) {
     log.warn(
       { err: errMsg(err) },

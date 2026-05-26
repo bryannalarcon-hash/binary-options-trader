@@ -4,7 +4,7 @@ import { PublicKey } from "@solana/web3.js";
 import { isNyseTradingDay } from "../calendar";
 import { env } from "../env";
 import { sendAlert } from "../lib/alerts";
-import { buildAnchorContext, isProgramDeployed } from "../lib/anchor";
+import { getAnchorContext, isProgramDeployed } from "../lib/anchor";
 import { fetchOpenMarkets, type MarketSummary } from "../lib/markets";
 import { configPda } from "../lib/pdas";
 import { sleep } from "../lib/retry";
@@ -38,7 +38,7 @@ export async function runSettleJob(): Promise<SettleResult[]> {
 
   let anchor;
   try {
-    anchor = buildAnchorContext(env.automationKeypairPath);
+    anchor = getAnchorContext(env.automationKeypairPath);
   } catch (err) {
     log.warn(
       { err: errMsg(err) },
