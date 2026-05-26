@@ -908,12 +908,17 @@ function QuoteBothSidesForm({
         askPrice,
         size,
       );
-      // Ensure the user's NO ATA exists — place_order's position guard reads it.
-      const bidTx = new Transaction().add(
+      // place_order requires user_usdc, user_yes AND user_no to all exist (the
+      // position guard reads user_no; user_yes is in the account list even for a
+      // bid). Create all three idempotently before each order so a quote works
+      // on a market where the user has no token accounts yet.
+      const ataIxs = [
+        createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
+        createAssociatedTokenAccountIdempotentInstruction(user, userYes, user, yesMint),
         createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
-        bidIx,
-      );
-      const askTx = new Transaction().add(askIx);
+      ];
+      const bidTx = new Transaction().add(...ataIxs, bidIx);
+      const askTx = new Transaction().add(...ataIxs, askIx);
       const bidSig = await provider.sendAndConfirm(bidTx);
       const askSig = await provider.sendAndConfirm(askTx);
       notify.success(
