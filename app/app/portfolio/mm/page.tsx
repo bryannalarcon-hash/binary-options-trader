@@ -859,9 +859,15 @@ function QuoteBothSidesForm({
       )[0];
       const usdcMint = new PublicKey(env.usdcMint);
       const user = wallet.publicKey;
-      const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+      const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction } =
+        await import("@solana/spl-token");
+      const noMint = PublicKey.findProgramAddressSync(
+        [Buffer.from("no_mint"), marketPk.toBuffer()],
+        programId,
+      )[0];
       const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
       const userYes = getAssociatedTokenAddressSync(yesMint, user);
+      const userNo = getAssociatedTokenAddressSync(noMint, user);
       const feeDestinationUsdc = await getFeeDestinationUsdc(program, usdcMint);
 
       const bidIx = await buildPlaceOrderIx(
@@ -869,10 +875,12 @@ function QuoteBothSidesForm({
         {
           market: marketPk,
           yesMint,
+          noMint,
           usdcMint,
           user,
           userUsdc,
           userYes,
+          userNo,
           counterpartyUsdc: userUsdc,
           counterpartyYes: userYes,
           feeDestinationUsdc,
@@ -886,10 +894,12 @@ function QuoteBothSidesForm({
         {
           market: marketPk,
           yesMint,
+          noMint,
           usdcMint,
           user,
           userUsdc,
           userYes,
+          userNo,
           counterpartyUsdc: userUsdc,
           counterpartyYes: userYes,
           feeDestinationUsdc,
@@ -898,7 +908,11 @@ function QuoteBothSidesForm({
         askPrice,
         size,
       );
-      const bidTx = new Transaction().add(bidIx);
+      // Ensure the user's NO ATA exists — place_order's position guard reads it.
+      const bidTx = new Transaction().add(
+        createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
+        bidIx,
+      );
       const askTx = new Transaction().add(askIx);
       const bidSig = await provider.sendAndConfirm(bidTx);
       const askSig = await provider.sendAndConfirm(askTx);

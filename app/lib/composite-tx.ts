@@ -605,10 +605,12 @@ export async function sweepCrossableLevels(
       {
         market,
         yesMint,
+        noMint,
         usdcMint,
         user,
         userUsdc,
         userYes,
+        userNo,
         counterpartyUsdc: userUsdc,
         counterpartyYes: userYes,
         feeDestinationUsdc,
