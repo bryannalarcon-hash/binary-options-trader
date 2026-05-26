@@ -1,70 +1,69 @@
 /**
- * 08-position-constraint.spec.ts
+ * 08 — Position constraint: opposite-side guard (Buy-Yes flow requirement #8).
  *
- * Position-constraint modal (PRD §2.8 + §17.2; IMPLEMENTATION_PLAN §5.3).
+ * "If the user already holds No tokens for this strike, the UI prompts them to
+ * sell No first before buying Yes." REAL burner-driven, no mocks.
  *
- * Coverage:
- *   - User holds No tokens for AAPL/22000
- *   - Clicks "Buy Yes" → PositionConstraintModal opens with the canonical copy
- *   - "Close No + Buy Yes" button fires a single bundled transaction
- *   - On success, the original No position is closed AND the Yes order is placed
+ * Holding both Yes+No is permitted by the contract only transiently (mint_pair
+ * gives both); the UI enforces that you can't END UP holding both FROM TRADING
+ * by routing an opposite-side buy through a "close first" prompt. The close+buy
+ * runs as TWO back-to-back transactions (not atomic) — the modal says so.
  *
- * Pre-conditions:
- *   - User has an existing No position (test 05 leaves one)
- *   - App implements T-FE-06 (PositionConstraintModal + composite-tx.ts)
+ * Requires a SEEDED stack (`pnpm mm:seed`) so the NO buy fills.
  */
+import { test, expect } from "@playwright/test";
+import { connectAndFund } from "../fixtures/demo-wallet";
 
-import { test, expect, expectWalletConnectedHeader } from "../fixtures/wallet";
+test.describe("Position constraint — opposite-side guard (Buy-Yes #8)", () => {
+  test("holding NO + attempt Buy YES → UI prompts to close NO first (2 back-to-back txs)", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await page.goto("/");
+    await connectAndFund(page, 1, 20);
 
-test.describe("Position constraint — opposite-side guard", () => {
-  test.fixme("Buy Yes while holding No → modal → Close+Buy bundled tx", async ({ page, mockWallet }) => {
-    await page.goto("/trade/AAPL/22000");
-    await mockWallet.connect();
-    await expectWalletConnectedHeader(page);
+    // Land on AAPL's ATM strike (seeded) and read it from the URL.
+    await page.goto("/trade/AAPL");
+    await page.waitForURL(/\/trade\/AAPL\/\d+/, { timeout: 30_000 });
+    await expect(page.getByText(/closes [≥<]/i).first()).toBeVisible({ timeout: 30_000 });
 
-    // Click Buy Yes
-    await page.getByRole("button", { name: /Buy\s*Yes/i }).click();
+    // 1. Acquire a NO position (market Buy NO = mint pair + sell YES on the book).
+    await page.getByRole("button", { name: /NO · closes/i }).click();
+    await page.getByRole("button", { name: /^Buy$/ }).click();
+    await page.locator("input[type='number']").first().fill("10");
+    await page.getByRole("button", { name: /Buy NO ·/ }).click();
+    const confirm = page.getByRole("button", { name: /^Confirm$/ });
+    if (await confirm.isVisible({ timeout: 2_000 }).catch(() => false)) await confirm.click();
+    await expect(page.getByText(/Bought\s+\d+\s+NO/i).first()).toBeVisible({ timeout: 40_000 });
 
-    // Modal opens with canonical copy from §17.2
-    const modal = page.locator(
-      "[role='dialog'], [data-testid='position-constraint-modal']",
-    );
-    await expect(modal.first()).toBeVisible({ timeout: 5_000 });
-    await expect(modal.first()).toContainText(/currently hold.*No tokens.*AAPL/i);
+    // 2. Wait for the NO holding to REGISTER in the panel (useHoldingForMarket
+    //    polls ~5s). Must do this BEFORE attempting Buy YES, or the buy would go
+    //    through (no constraint) instead of tripping the guard.
+    await expect
+      .poll(
+        async () => {
+          const t = await page
+            .getByText(/You hold .* on this strike/i)
+            .first()
+            .innerText()
+            .catch(() => "");
+          const m = t.match(/(\d+)\s+NO/);
+          return m ? Number(m[1]) : 0;
+        },
+        { timeout: 25_000, intervals: [2_000] },
+      )
+      .toBeGreaterThan(0);
 
-    // Count signatures.
-    await page.evaluate(() => {
-      const w = (window as unknown) as Record<string, unknown>;
-      const a = w.__meridianMockWallet as Record<string, unknown>;
-      a._signCount = 0;
-      const orig = a.signTransaction as (tx: unknown) => Promise<unknown>;
-      a.signTransaction = async (tx: unknown) => {
-        (a._signCount as number)++;
-        return orig(tx);
-      };
-    });
+    // 3. Now attempt Buy YES on the same strike → the guard must fire.
+    await page.getByRole("button", { name: /YES · closes/i }).click();
+    await page.getByRole("button", { name: /^Buy$/ }).click();
+    await page.getByRole("button", { name: /Buy YES ·/ }).click();
 
-    // Click "Close No + Buy Yes"
-    await modal
-      .first()
-      .getByRole("button", { name: /Close.*Buy|Close \+ Buy/i })
-      .click();
-
-    await expect(page.getByText(/confirmed|success/i)).toBeVisible({ timeout: 20_000 });
-
-    const signs = await page.evaluate(() => {
-      const w = (window as unknown) as Record<string, unknown>;
-      return (w.__meridianMockWallet as Record<string, unknown>)._signCount as number;
-    });
-    expect(signs).toBe(1); // Single bundled signature — the whole point of the UX.
-  });
-
-  test.fixme("Cancel button on modal returns to trade panel unchanged", async ({ page, mockWallet }) => {
-    await page.goto("/trade/AAPL/22000");
-    await mockWallet.connect();
-    await page.getByRole("button", { name: /Buy\s*Yes/i }).click();
-    const modal = page.locator("[role='dialog']").first();
-    await modal.getByRole("button", { name: /Cancel/i }).click();
-    await expect(modal).toBeHidden();
+    // 4. The modal prompts to close NO first and is HONEST that it's two
+    //    back-to-back transactions (not the old "one signed transaction" claim).
+    await expect(page.getByText(/Close opposite position first/i).first()).toBeVisible();
+    await expect(page.getByText(/close your No position first/i)).toBeVisible();
+    await expect(page.getByText(/two back-to-back transactions/i)).toBeVisible();
+    await expect(page.getByText(/one signed transaction|single signature/i)).toHaveCount(0);
   });
 });

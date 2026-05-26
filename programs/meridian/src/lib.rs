@@ -1,6 +1,6 @@
 //! Meridian — binary options prediction market on Solana.
 //!
-//! Twelve instructions; see `instructions/*.rs` for full handlers.
+//! Sixteen instructions; see `instructions/*.rs` for full handlers.
 
 use anchor_lang::prelude::*;
 
@@ -64,6 +64,16 @@ pub mod meridian {
         instructions::pause::handler(ctx, paused)
     }
 
+    /// Admin: tune the CONFIGURABLE settlement risk thresholds (oracle
+    /// staleness window in seconds + confidence band in basis points).
+    pub fn set_risk_params(
+        ctx: Context<SetRiskParams>,
+        max_staleness_secs: i64,
+        max_confidence_bps: u16,
+    ) -> Result<()> {
+        instructions::set_risk_params::handler(ctx, max_staleness_secs, max_confidence_bps)
+    }
+
     // -------- Token operations --------
 
     pub fn mint_pair(ctx: Context<MintPair>, amount_pairs: u64) -> Result<()> {
@@ -93,6 +103,14 @@ pub mod meridian {
         instructions::cancel_order::handler(ctx, side, index)
     }
 
+    /// Position-constraint guard. Reverts if the signer holds both YES and NO
+    /// for `market`. `place_order` requires this to appear later in the same
+    /// transaction when a Bid acquires YES while the buyer holds NO, so a
+    /// both-sides state can never persist past a tx boundary on the book path.
+    pub fn assert_single_sided(ctx: Context<AssertSingleSided>) -> Result<()> {
+        instructions::assert_single_sided::handler(ctx)
+    }
+
     // -------- Settlement / oracle --------
 
     pub fn settle_market(ctx: Context<SettleMarket>) -> Result<()> {
@@ -115,5 +133,11 @@ pub mod meridian {
         expo: i32,
     ) -> Result<()> {
         instructions::update_oracle::handler(ctx, ticker, price, conf, publish_time, expo)
+    }
+
+    /// Recovery: close a bricked oracle PDA (legacy `MockOracle` discriminator)
+    /// so `update_oracle` can re-create it with the current discriminator.
+    pub fn close_oracle(ctx: Context<CloseOracle>, ticker: String) -> Result<()> {
+        instructions::close_oracle::handler(ctx, ticker)
     }
 }

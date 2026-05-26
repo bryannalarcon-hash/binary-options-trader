@@ -6,9 +6,11 @@ import { env } from "../env";
 import { sendAlert } from "../lib/alerts";
 import { buildAnchorContext, isProgramDeployed } from "../lib/anchor";
 import { fetchOpenMarkets, type MarketSummary } from "../lib/markets";
+import { configPda } from "../lib/pdas";
 import { sleep } from "../lib/retry";
+import { postWebhook } from "../lib/webhook";
 import { ctx } from "../logger";
-import { runOracleUpdaterOnce } from "./update-mock-oracle";
+import { runOracleUpdaterOnce } from "./update-oracle";
 
 const log = ctx("settle");
 
@@ -57,11 +59,20 @@ export async function runSettleJob(): Promise<SettleResult[]> {
 
   // Ensure oracles are fresh BEFORE we start retrying settles — saves cycles
   // when prices are simply stale.
-  if (env.useMockOracle) {
+  if (env.useHermesOracle) {
     try {
       await runOracleUpdaterOnce();
     } catch (err) {
       log.warn({ err: errMsg(err) }, "pre-settle oracle refresh failed");
+      // Persistent oracle failure is a critical event — fire the webhook even
+      // though we'll still attempt settles below (a single market may have
+      // a fresh enough oracle PDA).
+      await postWebhook(env.alertWebhookUrl, {
+        severity: "critical",
+        source: "settle",
+        message: "pre-settle oracle refresh failed",
+        details: { error: errMsg(err) },
+      });
     }
   }
 
@@ -70,6 +81,27 @@ export async function runSettleJob(): Promise<SettleResult[]> {
     const res = await settleOneMarket(anchor.program, market);
     results.push(res);
     log.info(res, "market settle result");
+  }
+
+  // Aggregate critical event: if anything failed, surface the count so the
+  // operator can decide whether to invoke admin_settle_override.
+  const failed = results.filter((r) => r.status === "failed");
+  if (failed.length > 0) {
+    await postWebhook(env.alertWebhookUrl, {
+      severity: "critical",
+      source: "settle",
+      message: `${failed.length}/${results.length} markets failed to settle — admin override may be required after the 1h delay`,
+      details: {
+        total: results.length,
+        failed_count: failed.length,
+        failed_markets: failed.map((r) => ({
+          ticker: r.ticker,
+          strike: r.strike,
+          attempts: r.attempts,
+          reason: r.reason,
+        })),
+      },
+    });
   }
   return results;
 }
@@ -90,6 +122,7 @@ async function settleOneMarket(
         .accounts({
           market: market.address,
           oracle: market.oracle,
+          config: configPda(program.programId)[0],
           caller: program.provider.publicKey ?? PublicKey.default,
         })
         .rpc();
@@ -114,8 +147,8 @@ async function settleOneMarket(
           },
           "settle blocked on oracle; sleeping before retry",
         );
-        // Re-poke the mock oracle each cycle so a fresh price is available.
-        if (env.useMockOracle) {
+        // Re-poke the oracle each cycle so a fresh Pyth price is available.
+        if (env.useHermesOracle) {
           await runOracleUpdaterOnce().catch((e) =>
             log.warn({ err: errMsg(e) }, "oracle refresh during retry failed"),
           );
@@ -140,6 +173,17 @@ async function settleOneMarket(
       attempts,
       reason,
     },
+  });
+  // Also fire the raw webhook with the spec's canonical envelope so external
+  // dashboards can distinguish per-market retry exhaustion from oracle/admin
+  // events.
+  await postWebhook(env.alertWebhookUrl, {
+    severity: "error",
+    source: "settle",
+    message: `settle_market retry exhausted for ${market.ticker} @ ${market.strike}`,
+    ticker: market.ticker,
+    market: market.address.toBase58(),
+    details: { strike: market.strike, attempts, reason },
   });
   return {
     market: market.address.toBase58(),

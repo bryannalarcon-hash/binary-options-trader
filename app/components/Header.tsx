@@ -4,119 +4,226 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { Settings, Wallet as WalletIcon } from "lucide-react";
 
 import { env } from "@/lib/env";
 import { fmtUsdDollars, shortKey } from "@/lib/format";
 import { useMounted } from "@/lib/use-mounted";
 import { useUsdcBalance } from "@/lib/usdc";
 
+import { Wordmark, IconSettings, IconBolt, Button } from "@/components/caret";
 import { SettingsPanel } from "./SettingsPanel";
+import { DemoWalletControls } from "./DemoWalletControls";
+import { WalletConnectModal } from "./WalletConnectModal";
 
 const NAV = [
   { href: "/markets", label: "Markets" },
   { href: "/portfolio", label: "Portfolio" },
+  { href: "/portfolio/mm", label: "Market Maker" },
   { href: "/history", label: "History" },
+  { href: "/admin", label: "Admin", icon: true },
 ];
 
 /**
- * Global header per §16.6.
+ * Top navigation — caret style (ports prototype/js/nav.jsx into the live app).
  *
- * Elements:
- *   - Logo / Brand → /
- *   - Nav links → /markets /portfolio /history with active styling
- *   - Cluster pill (network indicator)
- *   - USDC balance chip (visible when wallet connected)
- *   - Wallet button (connect / address)
- *   - Settings cog → opens SettingsPanel
+ * Layout:
+ *   - Wordmark on left → /
+ *   - Nav links (Markets / Portfolio / Market Maker / History) center
+ *     with an underline on the active route
+ *   - Cluster pill + wallet button + settings cog on right
+ *
+ * Trade route handling: when the user is on /trade/* we light up "Markets"
+ * since there's no dedicated /trade index. (Markets-then-trade is the
+ * canonical flow per the PRD.)
  */
 export function Header() {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const mounted = useMounted();
   const wallet = useWallet();
-  const walletModal = useWalletModal();
   const usdc = useUsdcBalance();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [connectOpen, setConnectOpen] = useState(false);
 
-  // Guard against SSR prerender reading publicKey before hydration.
   const connected = mounted && wallet.connected;
   const publicKey = mounted ? wallet.publicKey : null;
   const disconnect = wallet.disconnect;
 
+  // Demo-wallet funding is MANUAL — use the "Fund demo wallet" button in the
+  // "Demo N ⚙" panel (DemoWalletControls). We intentionally do NOT auto-fund on
+  // connect.
+
+  function isActive(href: string): boolean {
+    if (href === "/portfolio") {
+      // Differentiate /portfolio from /portfolio/mm
+      return pathname === "/portfolio";
+    }
+    if (href === "/portfolio/mm") {
+      return pathname.startsWith("/portfolio/mm");
+    }
+    if (href === "/markets") {
+      // Light up "Markets" when browsing or trading.
+      return pathname.startsWith("/markets") || pathname.startsWith("/trade");
+    }
+    return pathname.startsWith(href);
+  }
+
   return (
     <>
-      <header className="sticky top-0 z-20 border-b border-border bg-bg/80 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-3">
-          <Link href="/" className="text-lg font-semibold tracking-tight">
-            {env.appName}
+      <header
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 100,
+          background:
+            "color-mix(in oklch, var(--bg) 80%, transparent)",
+          backdropFilter: "blur(14px) saturate(120%)",
+          WebkitBackdropFilter: "blur(14px) saturate(120%)",
+          borderBottom: "1px solid var(--line-soft)",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 1480,
+            margin: "0 auto",
+            padding: "14px 40px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 24,
+          }}
+        >
+          <Link href="/" style={{ display: "flex", alignItems: "center" }} aria-label="Meridian home">
+            <Wordmark size={17} />
           </Link>
-          <nav className="hidden gap-6 text-sm md:flex">
-            {NAV.map((item) => {
-              const active =
-                item.href === "/"
-                  ? pathname === "/"
-                  : pathname?.startsWith(item.href);
+
+          <nav style={{ display: "flex", gap: 4 }}>
+            {NAV.map((it) => {
+              const active = isActive(it.href);
               return (
                 <Link
-                  key={item.href}
-                  href={item.href}
-                  className={`transition-colors ${
-                    active ? "text-zinc-100" : "text-zinc-400 hover:text-zinc-100"
-                  }`}
+                  key={it.href}
+                  href={it.href}
+                  style={{
+                    background: "transparent",
+                    border: 0,
+                    padding: "8px 14px",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: active ? "var(--text)" : "var(--text-3)",
+                    position: "relative",
+                    transition: "color .12s",
+                    whiteSpace: "nowrap",
+                    textDecoration: "none",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}
                 >
-                  {item.label}
+                  {it.icon && <IconBolt size={12} />}
+                  {it.label}
+                  {active && (
+                    <span
+                      style={{
+                        position: "absolute",
+                        bottom: -15,
+                        left: "20%",
+                        right: "20%",
+                        height: 2,
+                        background: "var(--accent)",
+                        borderRadius: 2,
+                      }}
+                    />
+                  )}
                 </Link>
               );
             })}
           </nav>
-          <div className="flex items-center gap-2">
-            <span className="hidden rounded-full border border-border bg-surface px-2 py-1 text-[10px] uppercase tracking-wider text-zinc-400 md:inline">
-              {env.cluster || "localnet"}
-            </span>
-            {connected && (
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span
+              className="pill"
+              style={{ borderRadius: 6, fontSize: 10, padding: "4px 7px" }}
+              title={env.rpcUrl}
+            >
               <span
-                className="hidden items-center gap-1 rounded-full border border-border bg-surface px-2.5 py-1 text-xs font-mono text-zinc-200 sm:inline-flex"
-                title="USDC balance"
-              >
-                <WalletIcon size={12} className="text-accent" />
-                {usdc.loading
-                  ? "…"
-                  : usdc.cents != null
-                    ? fmtUsdDollars(usdc.cents / 100)
-                    : "—"}
-              </span>
-            )}
+                className="dot"
+                style={{ background: "var(--up)", boxShadow: "0 0 6px var(--up)" }}
+              />
+              {env.cluster || "Devnet"}
+            </span>
+
             {connected && publicKey ? (
               <button
                 type="button"
                 onClick={() => void disconnect()}
-                className="rounded-md border border-border bg-surface px-3 py-1.5 text-xs font-mono text-zinc-200 hover:bg-bg/60"
                 title="Click to disconnect"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 12px 6px 8px",
+                  background: "var(--bg-elev)",
+                  border: "1px solid var(--line)",
+                  borderRadius: 999,
+                  color: "var(--text)",
+                  fontFamily: "var(--mono)",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
               >
+                <span
+                  style={{
+                    width: 18,
+                    height: 18,
+                    borderRadius: "50%",
+                    background:
+                      "linear-gradient(135deg, var(--accent), oklch(0.6 0.2 290))",
+                  }}
+                />
                 {shortKey(publicKey.toBase58())}
+                {usdc.cents != null && (
+                  <>
+                    <span style={{ color: "var(--text-3)" }}>·</span>
+                    <span style={{ color: "var(--text-2)" }}>
+                      {usdc.loading ? "…" : fmtUsdDollars(usdc.cents / 100)}
+                    </span>
+                  </>
+                )}
               </button>
             ) : (
-              <button
-                type="button"
-                onClick={() => walletModal.setVisible(true)}
-                className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-bg hover:opacity-90"
-              >
+              <Button primary onClick={() => setConnectOpen(true)}>
                 Connect Wallet
-              </button>
+              </Button>
             )}
+
+            <DemoWalletControls />
+
             <button
               type="button"
               onClick={() => setSettingsOpen(true)}
-              className="rounded-md border border-border bg-surface p-1.5 text-zinc-400 hover:text-zinc-100"
               aria-label="Settings"
+              title="Settings"
+              style={{
+                width: 36,
+                height: 36,
+                padding: 0,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                background: "transparent",
+                border: "1px solid var(--line-soft)",
+                borderRadius: 8,
+                color: "var(--text-2)",
+                cursor: "pointer",
+              }}
             >
-              <Settings size={14} />
+              <IconSettings size={15} />
             </button>
           </div>
         </div>
       </header>
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <WalletConnectModal open={connectOpen} onClose={() => setConnectOpen(false)} />
     </>
   );
 }

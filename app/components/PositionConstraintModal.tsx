@@ -27,9 +27,10 @@ interface Props {
  * PositionConstraintModal — fired from TradePanel when the user attempts to
  * buy the side opposite their current holding (§5.3 / §17.2).
  *
- * Offers ONE-tap "Close + Buy" that bundles the close and the buy into a
- * single signed Solana transaction (built by `buildCloseAndReverseTrade`),
- * preserving atomicity and the single-signature UX requirement.
+ * Offers a one-tap "Close + Buy" that runs the close, then the buy, as TWO
+ * back-to-back Solana transactions (built by `buildCloseAndReverseTrade`). They
+ * are NOT atomic across both legs — the CLOB sweep + close/open can't reliably
+ * fit one tx — so each leg is signed/sent in turn.
  */
 export function PositionConstraintModal({
   ticker,
@@ -66,7 +67,7 @@ export function PositionConstraintModal({
         existingQuantity,
       });
       notify.success(
-        `Closed ${fmtCount(existingQuantity)} ${existingLabel} → bought ${fmtCount(newQuantity)} ${newLabel} in one tx`,
+        `Closed ${fmtCount(existingQuantity)} ${existingLabel} → bought ${fmtCount(newQuantity)} ${newLabel}`,
       );
       notify.info(`Tx: ${res.signature.slice(0, 16)}…`);
       onComplete();
@@ -88,7 +89,8 @@ export function PositionConstraintModal({
           {newLabel}, you must close your {existingLabel} position first.
         </p>
         <p className="rounded-md border border-accent/30 bg-accent/5 p-3 text-xs leading-relaxed text-zinc-200">
-          We&apos;ll bundle this into <strong>one signed transaction</strong>:
+          We&apos;ll do this in <strong>two back-to-back transactions</strong>{" "}
+          (you sign each):
           <br />
           <span className="text-zinc-400">
             1. Sell {fmtCount(existingQuantity)} {existingLabel} tokens

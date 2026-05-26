@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, type ReactNode } from "react";
-import { X } from "lucide-react";
+
+import { IconClose } from "@/components/caret";
 
 interface Props {
   title: string;
@@ -10,8 +11,9 @@ interface Props {
 }
 
 /**
- * ModalShell — common dialog wrapper. Handles ESC + click-outside dismiss
- * + scroll-lock per IMPLEMENTATION_PLAN §17 dismissal pattern.
+ * ModalShell — caret-styled common dialog wrapper. Handles ESC + click-outside
+ * dismiss + scroll-lock. Used by ConfirmTradeModal, PositionConstraintModal,
+ * and RedeemConfirmationModal.
  */
 export function ModalShell({ title, onClose, children }: Props) {
   useEffect(() => {
@@ -28,27 +30,38 @@ export function ModalShell({ title, onClose, children }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      className="modal-back"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
     >
-      <div
-        className="w-full max-w-md overflow-hidden rounded-lg border border-border bg-surface shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h3 className="text-sm font-medium">{title}</h3>
+      <div className="modal" style={{ padding: 0 }} onClick={(e) => e.stopPropagation()}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            borderBottom: "1px solid var(--line-soft)",
+            padding: "14px 20px",
+          }}
+        >
+          <h3 style={{ fontSize: 15 }}>{title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-zinc-400 transition-colors hover:bg-bg/60 hover:text-zinc-100"
             aria-label="Close"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "var(--text-3)",
+              cursor: "pointer",
+              padding: 4,
+            }}
           >
-            <X size={16} />
+            <IconClose size={16} />
           </button>
         </div>
-        <div className="p-4">{children}</div>
+        <div style={{ padding: 20 }}>{children}</div>
       </div>
     </div>
   );

@@ -15,11 +15,13 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-bg text-zinc-100 antialiased">
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
+      <body>
         <WalletProviderWrapper>
-          <Header />
-          <main className="mx-auto max-w-7xl px-6 py-8">{children}</main>
+          <div className="app">
+            <Header />
+            <main style={{ flex: 1 }}>{children}</main>
+          </div>
           <Toaster />
         </WalletProviderWrapper>
       </body>

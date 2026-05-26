@@ -8,6 +8,7 @@
     "build": "pnpm --filter @meridian/types build && pnpm --filter app build && pnpm --filter automation build",
     "test": "anchor test",
     "test:e2e": "pnpm --filter tests test:e2e",
+    "mm:seed": "automation/node_modules/.bin/tsx scripts/mm-seed-all.ts",
     "lint": "pnpm -r lint",
     "clean": "pnpm -r clean && rm -rf target .anchor"
   },

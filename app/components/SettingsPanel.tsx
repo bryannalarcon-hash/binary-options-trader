@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect } from "react";
-import { X } from "lucide-react";
+import { useEffect, type ReactNode } from "react";
 
+import { IconClose, Label, Seg, Button } from "@/components/caret";
 import { env } from "@/lib/env";
 import { useSettings } from "@/lib/settings";
 
@@ -12,11 +12,29 @@ interface Props {
 }
 
 /**
- * SettingsPanel — right-edge slide-over (§17.4).
- * Toggles persist immediately to localStorage via useSettings().
+ * SettingsPanel — caret-styled right-edge slide-over (ports prototype/js/settings.jsx).
+ *
+ * Persists all changes to localStorage via useSettings(). The "Light" theme
+ * sets `data-theme="light"` on <html>, picking up the CSS variable overrides
+ * in globals.css.
  */
 export function SettingsPanel({ open, onClose }: Props) {
   const [settings, update, reset] = useSettings();
+
+  // Apply theme to document root on change (so the whole app re-paints).
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const root = document.documentElement;
+    if (settings.theme === "light") {
+      root.setAttribute("data-theme", "light");
+    } else if (settings.theme === "dark") {
+      root.setAttribute("data-theme", "dark");
+    } else {
+      // system — match the user's preference
+      const mql = window.matchMedia("(prefers-color-scheme: light)");
+      root.setAttribute("data-theme", mql.matches ? "light" : "dark");
+    }
+  }, [settings.theme]);
 
   useEffect(() => {
     if (!open) return;
@@ -27,95 +45,256 @@ export function SettingsPanel({ open, onClose }: Props) {
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
+  if (!open) return null;
+
   return (
     <>
       <div
-        className={`fixed inset-0 z-40 bg-black/50 transition-opacity ${
-          open ? "opacity-100" : "pointer-events-none opacity-0"
-        }`}
         onClick={onClose}
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "oklch(0 0 0 / 0.4)",
+          backdropFilter: "blur(4px)",
+          zIndex: 8999,
+        }}
       />
       <aside
-        className={`fixed right-0 top-0 z-50 h-full w-full max-w-sm transform border-l border-border bg-surface shadow-xl transition-transform ${
-          open ? "translate-x-0" : "translate-x-full"
-        }`}
-        aria-hidden={!open}
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 420,
+          maxWidth: "100vw",
+          zIndex: 9000,
+          background: "var(--bg-elev)",
+          borderLeft: "1px solid var(--line)",
+          boxShadow: "-20px 0 60px rgba(0,0,0,.3)",
+          display: "flex",
+          flexDirection: "column",
+          animation: "slideIn .18s ease-out",
+        }}
       >
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <h2 className="text-sm font-medium">Settings</h2>
+        <div
+          style={{
+            padding: "18px 24px",
+            borderBottom: "1px solid var(--line-soft)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <h3>Settings</h3>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-zinc-400 transition-colors hover:bg-bg/60 hover:text-zinc-100"
             aria-label="Close settings"
+            style={{
+              background: "transparent",
+              border: 0,
+              color: "var(--text-3)",
+              cursor: "pointer",
+              padding: 6,
+            }}
           >
-            <X size={16} />
+            <IconClose size={14} />
           </button>
         </div>
-        <div className="space-y-5 overflow-y-auto px-4 py-5 text-sm">
+
+        <div style={{ flex: 1, overflow: "auto", padding: "8px 24px 24px" }}>
           <Section title="Trading">
-            <Toggle
-              label="Auto-redeem after settlement"
-              hint="Settled winning positions auto-redeem to USDC."
-              checked={settings.autoRedeem}
-              onChange={(v) => update({ autoRedeem: v })}
-            />
-            <Toggle
+            <SettingRow
               label="Confirm-trade modal"
-              hint="Show recap dialog for the first 3 trades."
-              checked={settings.confirmTradeModal}
-              onChange={(v) => update({ confirmTradeModal: v })}
-            />
-            <NumberRow
-              label="Default slippage"
-              suffix="%"
-              value={settings.slippageBps / 100}
-              onChange={(v) =>
-                update({ slippageBps: Math.max(0, Math.round(v * 100)) })
+              desc="Show recap dialog for the first 3 trades."
+              value={
+                <Toggle
+                  on={settings.confirmTradeModal}
+                  onChange={(v) => update({ confirmTradeModal: v })}
+                />
               }
-              step={0.1}
-              min={0}
+            />
+            <SettingRow
+              label="Auto-redeem after settlement"
+              desc="Settled winning positions auto-redeem to USDC."
+              value={
+                <Toggle
+                  on={settings.autoRedeem}
+                  onChange={(v) => update({ autoRedeem: v })}
+                />
+              }
+            />
+            <SettingRow
+              label="Default slippage"
+              desc="Used for market orders."
+              value={
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="number"
+                    min={0}
+                    max={5}
+                    step={0.1}
+                    value={settings.slippageBps / 100}
+                    onChange={(e) =>
+                      update({
+                        slippageBps: Math.max(
+                          0,
+                          Math.round(Number(e.target.value) * 100),
+                        ),
+                      })
+                    }
+                    style={{ width: 72, height: 32, textAlign: "right" }}
+                  />
+                  <span
+                    style={{
+                      color: "var(--text-3)",
+                      fontFamily: "var(--mono)",
+                      fontSize: 12,
+                    }}
+                  >
+                    %
+                  </span>
+                </div>
+              }
+            />
+            <SettingRow
+              label="Default quick-bet size"
+              desc="Used by Yes/No quick-bet chips on Markets."
+              value={
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="number"
+                    min={1}
+                    value={settings.defaultBetSizeUsd}
+                    onChange={(e) =>
+                      update({
+                        defaultBetSizeUsd: Math.max(
+                          1,
+                          Math.round(Number(e.target.value)),
+                        ),
+                      })
+                    }
+                    style={{ width: 72, height: 32, textAlign: "right" }}
+                  />
+                  <span
+                    style={{
+                      color: "var(--text-3)",
+                      fontFamily: "var(--mono)",
+                      fontSize: 12,
+                    }}
+                  >
+                    USDC
+                  </span>
+                </div>
+              }
             />
           </Section>
 
           <Section title="Appearance">
-            <SelectRow
+            <SettingRow
               label="Theme"
-              value={settings.theme}
-              options={[
-                { value: "dark", label: "Dark" },
-                { value: "light", label: "Light" },
-                { value: "system", label: "System" },
-              ]}
-              onChange={(v) => update({ theme: v as "system" | "light" | "dark" })}
+              desc="Light/dark/system."
+              value={
+                <Seg
+                  options={[
+                    { value: "dark", label: "Dark" },
+                    { value: "light", label: "Light" },
+                    { value: "system", label: "Auto" },
+                  ]}
+                  value={settings.theme}
+                  onChange={(v) =>
+                    update({ theme: v as "system" | "light" | "dark" })
+                  }
+                />
+              }
             />
           </Section>
 
           <Section title="Network">
-            <div className="flex items-center justify-between text-zinc-400">
-              <span>Cluster</span>
-              <span className="rounded border border-border bg-bg/40 px-2 py-1 text-xs uppercase tracking-wider">
-                {env.cluster || "localnet"}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-zinc-400">
-              <span>RPC</span>
-              <span className="truncate text-right font-mono text-[10px] text-zinc-500" title={env.rpcUrl}>
-                {env.rpcUrl || "—"}
-              </span>
-            </div>
+            <SettingRow
+              label="Cluster"
+              value={
+                <span
+                  className="pill"
+                  style={{
+                    textTransform: "uppercase",
+                    fontSize: 11,
+                  }}
+                >
+                  {env.cluster || "localnet"}
+                </span>
+              }
+            />
+            <SettingRow
+              label="RPC endpoint"
+              value={
+                <span
+                  style={{
+                    fontFamily: "var(--mono)",
+                    fontSize: 10.5,
+                    color: "var(--text-3)",
+                    maxWidth: 220,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    direction: "rtl",
+                  }}
+                  title={env.rpcUrl}
+                >
+                  {env.rpcUrl || "—"}
+                </span>
+              }
+            />
           </Section>
 
-          <div className="border-t border-border pt-4">
-            <button
-              type="button"
-              onClick={() => {
-                reset();
-              }}
-              className="w-full rounded-md border border-border px-3 py-2 text-xs text-zinc-300 hover:bg-bg/60"
-            >
+          <Section title="Notifications">
+            <SettingRow
+              label="Order fills"
+              value={<Toggle on={true} onChange={() => {}} />}
+            />
+            <SettingRow
+              label="Settlement alerts"
+              value={<Toggle on={true} onChange={() => {}} />}
+            />
+            <SettingRow
+              label="Strike chain updates"
+              value={<Toggle on={false} onChange={() => {}} />}
+            />
+          </Section>
+
+          <div
+            style={{
+              marginTop: 24,
+              padding: 14,
+              background: "var(--bg-elev-2)",
+              borderRadius: 8,
+              fontSize: 12,
+              color: "var(--text-3)",
+              lineHeight: 1.5,
+            }}
+          >
+            <div className="label" style={{ marginBottom: 8 }}>
+              Risks &amp; limitations
+            </div>
+            Settlement depends on the Pyth oracle being live within 15 minutes of
+            4:00 PM ET. In the rare case of failure, the admin override is
+            time-gated by 1 hour. No regulatory or compliance claims are made.
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginTop: 20,
+              gap: 10,
+            }}
+          >
+            <Button ghost onClick={() => reset()}>
               Reset to defaults
-            </button>
+            </Button>
+            <Button primary onClick={onClose}>
+              Done
+            </Button>
           </div>
         </div>
       </aside>
@@ -123,102 +302,69 @@ export function SettingsPanel({ open, onClose }: Props) {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section className="space-y-3">
-      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
-        {title}
-      </h3>
-      <div className="space-y-3">{children}</div>
-    </section>
+    <div style={{ marginTop: 24 }}>
+      <Label style={{ marginBottom: 6 }}>{title}</Label>
+      <div>{children}</div>
+    </div>
   );
 }
 
-function Toggle({
+function SettingRow({
   label,
-  hint,
-  checked,
-  onChange,
+  desc,
+  value,
 }: {
   label: string;
-  hint?: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
+  desc?: string;
+  value: ReactNode;
 }) {
   return (
-    <label className="flex cursor-pointer items-start justify-between gap-3 text-sm">
-      <span>
-        <span className="block text-zinc-200">{label}</span>
-        {hint && <span className="block text-[11px] text-zinc-500">{hint}</span>}
-      </span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-1 h-4 w-4 accent-accent"
+    <div className="set-row">
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, color: "var(--text)" }}>{label}</div>
+        {desc && (
+          <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 2 }}>
+            {desc}
+          </div>
+        )}
+      </div>
+      <div>{value}</div>
+    </div>
+  );
+}
+
+function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!on)}
+      aria-pressed={on}
+      style={{
+        width: 36,
+        height: 22,
+        borderRadius: 999,
+        background: on ? "var(--accent)" : "var(--bg-elev-2)",
+        border: "1px solid " + (on ? "var(--accent)" : "var(--line)"),
+        position: "relative",
+        cursor: "pointer",
+        padding: 0,
+        transition: "background .12s",
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 2,
+          left: on ? 16 : 2,
+          width: 16,
+          height: 16,
+          borderRadius: "50%",
+          background: on ? "var(--accent-ink)" : "var(--text-3)",
+          transition: "left .12s",
+        }}
       />
-    </label>
-  );
-}
-
-function NumberRow({
-  label,
-  suffix,
-  value,
-  onChange,
-  step,
-  min,
-}: {
-  label: string;
-  suffix?: string;
-  value: number;
-  onChange: (v: number) => void;
-  step?: number;
-  min?: number;
-}) {
-  return (
-    <label className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-zinc-200">{label}</span>
-      <span className="flex items-center gap-1">
-        <input
-          type="number"
-          value={value}
-          step={step}
-          min={min}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="w-20 rounded-md border border-border bg-bg px-2 py-1 text-right font-mono text-sm outline-none focus:border-accent"
-        />
-        {suffix && <span className="text-xs text-zinc-500">{suffix}</span>}
-      </span>
-    </label>
-  );
-}
-
-function SelectRow({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-}) {
-  return (
-    <label className="flex items-center justify-between gap-3 text-sm">
-      <span className="text-zinc-200">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-border bg-bg px-2 py-1 text-sm outline-none focus:border-accent"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+    </button>
   );
 }

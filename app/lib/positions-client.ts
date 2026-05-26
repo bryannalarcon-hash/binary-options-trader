@@ -1,27 +1,25 @@
 /**
- * Positions + history client.
+ * Positions + history client — REAL on-chain only (no synthesized fallbacks).
  *
- * REAL on-chain (with mock fallback):
- *   - `useUserPositions` reads the user's YES + NO SPL token balances for
- *     every known on-chain market. Entry price is approximated from the
- *     midprice of the live order book (we don't track per-trade cost basis
- *     on chain in v1, so this is the best we can do without indexing).
- *   - `useHoldingForMarket` reads the YES + NO ATA balances for a specific
- *     (ticker, strike).
- *   - `useUserHistory` subscribes to the program's log stream and parses
- *     `PairMinted`, `PairRedeemed`, `OrderPlaced`, `OrderMatched`,
- *     `OrderCancelled`, and `Redeemed` events. It seeds from the most
- *     recent N signatures for the user's wallet, then live-appends.
+ *   - `useUserPositions` reads the user's YES + NO SPL token balances for every
+ *     real on-chain market. Cost basis (entryPrice) is derived from the user's
+ *     REAL fills (OrderMatched / PairMinted) via the same history feed; when a
+ *     position's basis can't be determined, `entryPrice` is null and unrealized
+ *     P&L is hidden for that row.
+ *   - `useHoldingForMarket` reads the YES + NO ATA balances for one (ticker,
+ *     strike).
+ *   - `useUserHistory` seeds from the user's recent program signatures, then
+ *     live-appends parsed `PairMinted`, `PairRedeemed`, `OrderPlaced`,
+ *     `OrderMatched`, `OrderCancelled`, `Redeemed` events.
  *
- * Fallback to deterministic mocks when:
- *   - the program isn't deployed,
- *   - the on-chain market list is empty,
- *   - or any RPC call throws (we keep last-good state).
+ * Honest states everywhere: empty positions / empty history when there's
+ * nothing on-chain; `loading` while reading; `error` on RPC failure. We NEVER
+ * synthesize holdings, history, cost basis, or a P&L curve.
  */
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AnchorProvider,
   BN,
@@ -49,15 +47,37 @@ import type { Market, Side } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
 import { useAllMarkets } from "./markets-client";
-import type { HistoryEvent, MockPosition } from "./mock-data";
-import {
-  mockMarket,
-  spotForTicker,
-  strikesForTicker,
-  yesPriceCents,
-} from "./mock-data";
 import { MAG7_TICKERS, type Ticker } from "./tickers";
 import { useMounted } from "./use-mounted";
+
+void MAG7_TICKERS;
+
+/**
+ * A position the user holds. `entryPrice` is the REAL volume-weighted cost
+ * basis in cents derived from fills, or null when it can't be determined.
+ * `currentPrice` is the live book mid in cents, or null when the book is empty.
+ */
+export interface Position {
+  market: Market;
+  side: Side;
+  quantity: number;
+  entryPrice: number | null;
+  currentPrice: number | null;
+}
+
+/** A decoded on-chain history event for the connected wallet. */
+export interface HistoryEvent {
+  ts: number;
+  type: "buy" | "sell" | "mint_pair" | "redeem_pair" | "redeem" | "settle";
+  ticker: Ticker;
+  strike: number;
+  side: Side | null;
+  quantity: number;
+  price: number; // cents
+  feeCents: number;
+  status: "filled" | "cancelled" | "failed";
+  txSig: string;
+}
 
 function makeReadOnlyProgram(connection: ReturnType<typeof useConnection>["connection"]):
   | { program: Program; programId: PublicKey }
@@ -86,65 +106,9 @@ function makeReadOnlyProgram(connection: ReturnType<typeof useConnection>["conne
   return { program, programId };
 }
 
-/** Deterministic stub: synthesizes a small holdings book for a wallet. */
-function synthesizePositions(walletKey: string): MockPosition[] {
-  const seed = walletKey.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
-  const out: MockPosition[] = [];
-
-  for (let i = 0; i < 4; i++) {
-    const ticker = MAG7_TICKERS[(seed + i) % MAG7_TICKERS.length]!;
-    const strikes = strikesForTicker(ticker);
-    const strike = strikes[(seed + i * 3) % strikes.length]!;
-    const side: Side = (seed + i) % 2 === 0 ? "yes" : "no";
-    const market = mockMarket(ticker, strike);
-    const yes = yesPriceCents(ticker, strike);
-    const currentPrice = side === "yes" ? yes : 100 - yes;
-    const entryPrice = Math.max(2, Math.min(98, currentPrice + ((seed + i) % 11) - 5));
-    out.push({
-      market,
-      side,
-      quantity: 50 + ((seed + i * 11) % 150),
-      entryPrice,
-      currentPrice,
-    });
-  }
-  return out;
-}
-
-/** Synthesize history events for this wallet. */
-function synthesizeHistory(walletKey: string): HistoryEvent[] {
-  const seed = walletKey.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
-  const out: HistoryEvent[] = [];
-  const now = Date.now();
-
-  for (let i = 0; i < 25; i++) {
-    const ticker = MAG7_TICKERS[(seed + i) % MAG7_TICKERS.length]!;
-    const strikes = strikesForTicker(ticker);
-    const strike = strikes[(seed + i * 5) % strikes.length]!;
-    const side: Side = (seed + i) % 2 === 0 ? "yes" : "no";
-    const eventTypes: HistoryEvent["type"][] = ["buy", "sell", "mint_pair", "redeem"];
-    const type = eventTypes[(seed + i) % eventTypes.length]!;
-    const yes = yesPriceCents(ticker, strike);
-    const price = side === "yes" ? yes : 100 - yes;
-    out.push({
-      ts: now - i * 1000 * 60 * 17,
-      type,
-      ticker,
-      strike,
-      side: type === "mint_pair" || type === "redeem_pair" ? null : side,
-      quantity: 25 + ((seed + i * 13) % 100),
-      price,
-      feeCents: 2 + (i % 4),
-      status:
-        i % 11 === 0 ? "cancelled" : i % 17 === 0 ? "failed" : "filled",
-      txSig: `hist${i}${ticker}${strike}`.padEnd(88, "0"),
-    });
-  }
-  return out;
-}
-
 export interface PortfolioSummary {
   totalValueDollars: number;
+  /** Unrealized P&L over positions where cost basis is known. */
   unrealizedPnlDollars: number;
   realizedPnlDollars: number;
   openCount: number;
@@ -152,8 +116,7 @@ export interface PortfolioSummary {
 
 /**
  * Read SPL balance for `mint` owned by `user`. Returns 0 if the ATA doesn't
- * exist yet (which is the common case for fresh markets). Other errors
- * surface as null so the caller can fall back.
+ * exist yet (common for fresh markets). Other errors surface as null.
  */
 async function safeBalance(
   connection: ReturnType<typeof useConnection>["connection"],
@@ -170,23 +133,129 @@ async function safeBalance(
   }
 }
 
+/** Read one market's best bid/ask mid (cents), or null if the book is empty. */
+async function bookMidCents(
+  program: Program,
+  programId: PublicKey,
+  marketAddr: string,
+): Promise<number | null> {
+  const ob = PublicKey.findProgramAddressSync(
+    [Buffer.from("orderbook"), new PublicKey(marketAddr).toBuffer()],
+    programId,
+  )[0];
+  try {
+    const raw = (await (program.account as any).orderBook.fetch(ob)) as {
+      bids: Array<{ owner: PublicKey; price: number; size: BN }>;
+      asks: Array<{ owner: PublicKey; price: number; size: BN }>;
+    };
+    let bestBid = -1;
+    let bestAsk = -1;
+    for (const b of raw.bids ?? []) {
+      if (!b || b.owner.equals(PublicKey.default) || b.size.isZero()) continue;
+      if (b.price > bestBid) bestBid = b.price;
+    }
+    for (const a of raw.asks ?? []) {
+      if (!a || a.owner.equals(PublicKey.default) || a.size.isZero()) continue;
+      if (bestAsk < 0 || a.price < bestAsk) bestAsk = a.price;
+    }
+    if (bestBid >= 0 && bestAsk >= 0) return Math.round((bestBid + bestAsk) / 2);
+    if (bestBid >= 0) return bestBid;
+    if (bestAsk >= 0) return bestAsk;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Compute volume-weighted cost basis (cents) per (marketAddress, side) from the
+ * user's REAL fills. Buys/mints add to basis; sells/redeems reduce remaining
+ * quantity proportionally. Returns null entries when no acquiring fill exists.
+ */
+function deriveCostBasis(
+  events: HistoryEvent[],
+  markets: Market[],
+): Map<string, { qty: number; avgCents: number }> {
+  // Map (ticker|strike) → market address for keying by side.
+  const addrByKey = new Map<string, string>();
+  for (const m of markets) addrByKey.set(`${m.ticker}|${m.strike}`, m.address);
+
+  // Replay oldest → newest so weighted average is correct.
+  const ordered = [...events].sort((a, b) => a.ts - b.ts);
+  const acc = new Map<string, { qty: number; cost: number }>();
+
+  function keyFor(ev: HistoryEvent, side: Side): string | null {
+    const addr = addrByKey.get(`${ev.ticker}|${ev.strike}`);
+    if (!addr) return null;
+    return `${addr}|${side}`;
+  }
+
+  for (const ev of ordered) {
+    if (ev.type === "buy" && ev.side) {
+      const k = keyFor(ev, ev.side);
+      if (!k) continue;
+      const cur = acc.get(k) ?? { qty: 0, cost: 0 };
+      cur.qty += ev.quantity;
+      cur.cost += ev.quantity * ev.price;
+      acc.set(k, cur);
+    } else if (ev.type === "mint_pair") {
+      // Minting a pair acquires both YES and NO at $1 par split — par per leg
+      // is the pair price (100c) minus the other leg's market value; with no
+      // reliable per-leg split we treat each leg's basis as the par of the pair
+      // (50c each is misleading). We DON'T fabricate a split: skip mint_pair for
+      // basis so a position acquired purely via minting reports unknown basis.
+      continue;
+    } else if (ev.type === "sell" && ev.side) {
+      const k = keyFor(ev, ev.side);
+      if (!k) continue;
+      const cur = acc.get(k);
+      if (!cur || cur.qty <= 0) continue;
+      const sellQty = Math.min(ev.quantity, cur.qty);
+      const avg = cur.cost / cur.qty;
+      cur.qty -= sellQty;
+      cur.cost -= sellQty * avg;
+      if (cur.qty <= 0) acc.delete(k);
+      else acc.set(k, cur);
+    }
+  }
+
+  const out = new Map<string, { qty: number; avgCents: number }>();
+  for (const [k, v] of acc) {
+    if (v.qty > 0) out.set(k, { qty: v.qty, avgCents: Math.round(v.cost / v.qty) });
+  }
+  return out;
+}
+
 /**
  * Hook: caller's active + settled positions, plus aggregate summary.
+ * Real SPL balances; real cost basis from fills; live book mid for mark.
  */
 export function useUserPositions(): {
-  active: MockPosition[];
-  settled: MockPosition[];
+  active: Position[];
+  settled: Position[];
   summary: PortfolioSummary;
   loading: boolean;
+  error: boolean;
+  /** Force an immediate re-read of on-chain balances (wired to "Refresh"). */
+  refetch: () => void;
 } {
   const mounted = useMounted();
   const wallet = useWallet();
   const { connection } = useConnection();
   const publicKey = mounted ? wallet.publicKey : null;
-  const { markets } = useAllMarkets();
-  const [active, setActive] = useState<MockPosition[]>([]);
-  const [settled, setSettled] = useState<MockPosition[]>([]);
+  const { markets, loading: marketsLoading, error: marketsError } = useAllMarkets();
+  const { events } = useUserHistory();
+  const [active, setActive] = useState<Position[]>([]);
+  const [settled, setSettled] = useState<Position[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  // Bumping this re-runs the effect (clears + restarts the poll, firing an
+  // immediate refresh) so the "Refresh" button actually re-reads on-chain state.
+  const [reloadKey, setReloadKey] = useState(0);
+  // Stale-while-revalidate: keep last-good positions across 8s refreshes; only
+  // show the loading skeleton on the very first load (not every poll), and never
+  // blank good data on a transient read error → no data↔skeleton flicker.
+  const firstLoadRef = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,59 +263,89 @@ export function useUserPositions(): {
       setActive([]);
       setSettled([]);
       setLoading(false);
+      setError(false);
+      return;
+    }
+    if (!env.programId) {
+      setActive([]);
+      setSettled([]);
+      setError(true);
+      setLoading(false);
+      return;
+    }
+    if (markets.length === 0) {
+      // Distinguish "markets still loading" from "genuinely none": hold the
+      // loading state during the initial fetch instead of flashing an empty
+      // "no positions" panel before markets arrive.
+      if (marketsLoading && firstLoadRef.current) {
+        setLoading(true);
+        return;
+      }
+      setActive([]);
+      setSettled([]);
+      setError(marketsError);
+      setLoading(false);
       return;
     }
 
+    const built = makeReadOnlyProgram(connection);
+    const basis = deriveCostBasis(events, markets);
+
     async function refresh() {
       if (cancelled || !publicKey) return;
-      setLoading(true);
-      // If we don't have any real markets (program down) fall back to mock.
-      if (markets.length === 0 || !env.programId) {
-        const all = synthesizePositions(publicKey.toBase58());
+      if (firstLoadRef.current) setLoading(true);
+      const activeOut: Position[] = [];
+      const settledOut: Position[] = [];
+      try {
+        for (const m of markets) {
+          const yesMint = new PublicKey(m.yesMint);
+          const noMint = new PublicKey(m.noMint);
+          const [yesBal, noBal] = await Promise.all([
+            safeBalance(connection, publicKey, yesMint),
+            safeBalance(connection, publicKey, noMint),
+          ]);
+          const mid = built ? await bookMidCents(built.program, built.programId, m.address) : null;
+          const yesCurrent = mid;
+          const noCurrent = mid != null ? 100 - mid : null;
+
+          if ((yesBal ?? 0) > 0) {
+            const b = basis.get(`${m.address}|yes`);
+            const pos: Position = {
+              market: m,
+              side: "yes",
+              quantity: yesBal ?? 0,
+              entryPrice: b ? b.avgCents : null,
+              currentPrice: yesCurrent,
+            };
+            if (m.settled) settledOut.push(pos);
+            else activeOut.push(pos);
+          }
+          if ((noBal ?? 0) > 0) {
+            const b = basis.get(`${m.address}|no`);
+            const pos: Position = {
+              market: m,
+              side: "no",
+              quantity: noBal ?? 0,
+              entryPrice: b ? b.avgCents : null,
+              currentPrice: noCurrent,
+            };
+            if (m.settled) settledOut.push(pos);
+            else activeOut.push(pos);
+          }
+        }
         if (cancelled) return;
-        setActive(all.slice(1));
-        setSettled(all.slice(0, 1));
+        setActive(activeOut);
+        setSettled(settledOut);
+        setError(false);
         setLoading(false);
-        return;
-      }
-      // For each known market read YES+NO balances. Only keep > 0 holdings.
-      const activeOut: MockPosition[] = [];
-      const settledOut: MockPosition[] = [];
-      for (const m of markets) {
-        const yesMint = new PublicKey(m.yesMint);
-        const noMint = new PublicKey(m.noMint);
-        const [yesBal, noBal] = await Promise.all([
-          safeBalance(connection, publicKey, yesMint),
-          safeBalance(connection, publicKey, noMint),
-        ]);
-        const currentYes = yesPriceCents(m.ticker, m.strike);
-        if ((yesBal ?? 0) > 0) {
-          const pos: MockPosition = {
-            market: m,
-            side: "yes",
-            quantity: yesBal ?? 0,
-            entryPrice: currentYes, // best-effort — we don't track cost basis on-chain
-            currentPrice: currentYes,
-          };
-          if (m.settled) settledOut.push(pos);
-          else activeOut.push(pos);
-        }
-        if ((noBal ?? 0) > 0) {
-          const pos: MockPosition = {
-            market: m,
-            side: "no",
-            quantity: noBal ?? 0,
-            entryPrice: 100 - currentYes,
-            currentPrice: 100 - currentYes,
-          };
-          if (m.settled) settledOut.push(pos);
-          else activeOut.push(pos);
+        firstLoadRef.current = false;
+      } catch {
+        if (!cancelled) {
+          // Keep last-good positions; only surface an error on the first load.
+          if (firstLoadRef.current) setError(true);
+          setLoading(false);
         }
       }
-      if (cancelled) return;
-      setActive(activeOut);
-      setSettled(settledOut);
-      setLoading(false);
     }
 
     void refresh();
@@ -255,28 +354,32 @@ export function useUserPositions(): {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [connection, publicKey, mounted, markets]);
+  }, [connection, publicKey, mounted, markets, marketsLoading, marketsError, events, reloadKey]);
 
-  const summary = aggregate(active, settled);
-  return { active, settled, summary, loading };
+  const summary = useMemo(() => aggregate(active, settled), [active, settled]);
+  const refetch = () => setReloadKey((k) => k + 1);
+  return { active, settled, summary, loading, error, refetch };
 }
 
-function aggregate(
-  active: MockPosition[],
-  settled: MockPosition[],
-): PortfolioSummary {
+function aggregate(active: Position[], settled: Position[]): PortfolioSummary {
   let total = 0;
   let unreal = 0;
   let real = 0;
   for (const p of active) {
-    total += (p.quantity * p.currentPrice) / 100;
-    unreal += (p.quantity * (p.currentPrice - p.entryPrice)) / 100;
+    if (p.currentPrice != null) {
+      total += (p.quantity * p.currentPrice) / 100;
+      if (p.entryPrice != null) {
+        unreal += (p.quantity * (p.currentPrice - p.entryPrice)) / 100;
+      }
+    }
   }
   for (const p of settled) {
     const winning = p.market.outcome === p.side;
     const payout = winning ? p.quantity * 1 : 0;
     total += payout;
-    real += payout - (p.quantity * p.entryPrice) / 100;
+    if (p.entryPrice != null) {
+      real += payout - (p.quantity * p.entryPrice) / 100;
+    }
   }
   return {
     totalValueDollars: total,
@@ -287,20 +390,15 @@ function aggregate(
 }
 
 // ---------------------------------------------------------------------------
-// History — subscribe to program events + optionally seed from signature scan
+// History — subscribe to program events + seed from signature scan.
 // ---------------------------------------------------------------------------
 
-/** Map an OrderMatched taker-side (0 = bid → buy YES) to the UI side label. */
 function mapTakerSideToUiSide(takerSide: number): Side {
   return takerSide === 0 ? "yes" : "no";
 }
-
-/** Map an OrderPlaced.side (0 = bid → buy YES) to the UI side label. */
 function mapOrderSideToUiSide(side: number): Side {
   return side === 0 ? "yes" : "no";
 }
-
-/** Resolve a `market` pubkey to a (ticker, strike) using the live markets list. */
 function marketLookup(markets: Market[]): Map<string, { ticker: Ticker; strike: number }> {
   const map = new Map<string, { ticker: Ticker; strike: number }>();
   for (const m of markets) {
@@ -310,18 +408,10 @@ function marketLookup(markets: Market[]): Map<string, { ticker: Ticker; strike: 
 }
 
 /**
- * Hook: trade history for the caller.
- *
- * Strategy:
- *   - Seed with whatever we can read from the user's last 50 tx signatures
- *     (cheap historical replay). Each signature is fetched + parsed for
- *     program events.
- *   - Subscribe via `connection.onLogs(programId)` for live updates. Filter
- *     events where the `user`/`taker`/`maker` pubkey == the connected wallet.
- *
- * Falls back to deterministic mocks when the program isn't deployed.
+ * Hook: trade history for the caller — REAL on-chain events only.
+ * Empty until something is found; never synthesized.
  */
-export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
+export function useUserHistory(): { events: HistoryEvent[]; loading: boolean; error: boolean } {
   const mounted = useMounted();
   const wallet = useWallet();
   const { connection } = useConnection();
@@ -329,6 +419,7 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
   const { markets } = useAllMarkets();
   const [events, setEvents] = useState<HistoryEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const eventsRef = useRef<HistoryEvent[]>([]);
 
   useEffect(() => {
@@ -338,14 +429,17 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
     if (!mounted || !publicKey) {
       setEvents([]);
       setLoading(false);
+      setError(false);
       return;
     }
     setLoading(true);
+    setError(false);
+    eventsRef.current = [];
+    setEvents([]);
 
-    // Fallback path — no program deployed.
     const built = makeReadOnlyProgram(connection);
     if (!built) {
-      setEvents(synthesizeHistory(publicKey.toBase58()));
+      setError(true);
       setLoading(false);
       return;
     }
@@ -364,7 +458,7 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
       const tickerStrike = d.market
         ? lookup.get((d.market as PublicKey).toBase58())
         : null;
-      if (!tickerStrike) return; // unknown market — skip (would render blank rows)
+      if (!tickerStrike) return; // unknown market — skip
 
       let row: HistoryEvent | null = null;
 
@@ -379,7 +473,7 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
             strike: tickerStrike.strike,
             side: null,
             quantity: Number((d.amountPairs as BN).toString()),
-            price: 100, // $1 par
+            price: 100,
             feeCents: 0,
             status: "filled",
             txSig: sig,
@@ -407,7 +501,6 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
         case "orderPlaced": {
           if ((d.user as PublicKey)?.toBase58() !== myKey) return;
           const side = mapOrderSideToUiSide(Number(d.side));
-          // Side 0 (Bid) = buying YES = "buy yes"; side 1 (Ask) = "sell yes".
           row = {
             ts,
             type: Number(d.side) === 0 ? "buy" : "sell",
@@ -429,8 +522,6 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
           if (takerKey !== myKey && makerKey !== myKey) return;
           const isTaker = takerKey === myKey;
           const takerSideNum = Number(d.takerSide);
-          // If I'm the taker: my side matches takerSide directly.
-          // If I'm the maker: my side is the OPPOSITE of takerSide.
           const mySide: Side = isTaker
             ? mapTakerSideToUiSide(takerSideNum)
             : takerSideNum === 0
@@ -478,8 +569,6 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
             strike: tickerStrike.strike,
             side: sideNum === 0 ? "yes" : "no",
             quantity: Number((d.amountBurned as BN).toString()),
-            // usdc_paid is in micro-USDC (6 decimals); convert to display cents
-            // by dividing the contract's micro-USDC by 10_000 → cents.
             price:
               Number((d.amountBurned as BN).toString()) === 0
                 ? 0
@@ -503,12 +592,16 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
       if (!cancelled) setEvents(next);
     }
 
-    // Seed from recent program signatures (best-effort — non-fatal on error).
     async function seedHistory() {
       try {
+        // Scan the USER's own signatures, not the program's. A program-wide
+        // scan (limit 50) buries the user's fills once the program gets busy
+        // (e.g. after the market maker seeds every book), which silently
+        // dropped their cost basis → "—" for avg/cost/unrealized. The user's
+        // own address always surfaces their trades regardless of program load.
         const sigs = await connection.getSignaturesForAddress(
-          built!.programId,
-          { limit: 50 },
+          publicKey!,
+          { limit: 100 },
           "confirmed",
         );
         for (const s of sigs) {
@@ -529,14 +622,13 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
           }
         }
       } catch {
-        /* seeding failed — live subscription will fill in */
+        if (!cancelled) setError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
     }
     void seedHistory();
 
-    // Live subscription.
     try {
       subId = connection.onLogs(
         built.programId,
@@ -568,16 +660,12 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean } {
     };
   }, [connection, publicKey, mounted, markets]);
 
-  return { events, loading };
+  return { events, loading, error };
 }
 
 /**
  * Read the user's current Yes/No quantity for a specific (ticker, strike).
  * Returns 0 if not connected or no holdings.
- *
- * Goes straight to SPL ATA balances rather than aggregating `useUserPositions`
- * so the TradePanel doesn't pay the cost of fetching every market's balance
- * just to render one row.
  */
 export function useHoldingForMarket(
   ticker: Ticker,
@@ -631,6 +719,5 @@ export function useHoldingForMarket(
   return holding;
 }
 
-// TOKEN_PROGRAM_ID is imported for parity with other call sites; touch it so
-// strict "noUnusedImports" lints (if enabled) don't trip.
+// TOKEN_PROGRAM_ID kept imported for parity with other call sites.
 void TOKEN_PROGRAM_ID;

@@ -6,7 +6,7 @@ use anchor_spl::{
 
 use crate::errors::MeridianError;
 use crate::instructions::create_strike_market::create_pda_mint;
-use crate::state::{Config, Market, MockOracle, MAX_TICKER_LEN};
+use crate::state::{Config, Market, OracleAccount, MAX_TICKER_LEN};
 
 /// Admin-gated intraday strike addition. Same account layout as
 /// `create_strike_market` but requires the admin to sign.
@@ -64,10 +64,10 @@ pub struct AddStrike<'info> {
     pub vault: Box<Account<'info, TokenAccount>>,
 
     #[account(
-        seeds = [MockOracle::SEED_PREFIX, ticker.as_bytes()],
+        seeds = [OracleAccount::SEED_PREFIX, ticker.as_bytes()],
         bump = oracle.bump,
     )]
-    pub oracle: Box<Account<'info, MockOracle>>,
+    pub oracle: Box<Account<'info, OracleAccount>>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,

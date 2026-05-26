@@ -41,6 +41,8 @@ pub fn handler(
     cfg.usdc_mint = usdc_mint;
     cfg.paused = false;
     cfg.bump = ctx.bumps.config;
+    cfg.max_staleness_secs = Config::DEFAULT_MAX_STALENESS_SECS;
+    cfg.max_confidence_bps = Config::DEFAULT_MAX_CONFIDENCE_BPS;
 
     emit!(ConfigInitialized {
         admin,

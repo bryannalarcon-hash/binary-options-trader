@@ -50,7 +50,7 @@ pub fn vault_pda(program_id: &Pubkey, market: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[VAULT_SEED, market.as_ref()], program_id)
 }
 
-/// Derive the mock oracle PDA for a given ticker.
+/// Derive the oracle PDA for a given ticker.
 pub fn oracle_pda(program_id: &Pubkey, ticker: &[u8]) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[ORACLE_SEED, ticker], program_id)
 }

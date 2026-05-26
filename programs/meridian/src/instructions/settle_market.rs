@@ -1,15 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::MeridianError;
-use crate::state::{Market, MockOracle, Outcome};
-
-/// Maximum oracle staleness in seconds.
-pub const ORACLE_MAX_STALENESS_SECS: i64 = 300;
-
-/// Maximum conf/|price| ratio (0.005 = 0.5%). Expressed as numerator/denominator
-/// to stay in integer math: conf * 1000 <= price * 5.
-pub const ORACLE_CONF_NUMER: u128 = 5;
-pub const ORACLE_CONF_DENOM: u128 = 1000;
+use crate::state::{Config, Market, OracleAccount, Outcome};
 
 #[derive(Accounts)]
 pub struct SettleMarket<'info> {
@@ -27,10 +19,18 @@ pub struct SettleMarket<'info> {
     pub market: Box<Account<'info, Market>>,
 
     #[account(
-        seeds = [MockOracle::SEED_PREFIX, market.ticker.as_bytes()],
+        seeds = [OracleAccount::SEED_PREFIX, market.ticker.as_bytes()],
         bump = oracle.bump,
     )]
-    pub oracle: Box<Account<'info, MockOracle>>,
+    pub oracle: Box<Account<'info, OracleAccount>>,
+
+    /// Global config — supplies the CONFIGURABLE staleness + confidence
+    /// thresholds (admin-tunable via `set_risk_params`).
+    #[account(
+        seeds = [Config::SEED_PREFIX],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, Config>>,
 
     pub caller: Signer<'info>,
 }
@@ -47,6 +47,7 @@ pub struct MarketSettled {
 pub fn handler(ctx: Context<SettleMarket>) -> Result<()> {
     let market = &mut ctx.accounts.market;
     let oracle = &ctx.accounts.oracle;
+    let config = &ctx.accounts.config;
     let clock = Clock::get()?;
 
     require!(!market.settled, MeridianError::AlreadySettled);
@@ -55,14 +56,14 @@ pub fn handler(ctx: Context<SettleMarket>) -> Result<()> {
         MeridianError::TimeGateNotElapsed
     );
 
-    // Staleness: oracle.publish_time must be within ORACLE_MAX_STALENESS_SECS
-    // of the current time.
+    // Staleness: oracle.publish_time must be within the CONFIGURABLE
+    // config.max_staleness_secs of the current time.
     let age = clock
         .unix_timestamp
         .checked_sub(oracle.publish_time)
         .ok_or(MeridianError::MathOverflow)?;
     require!(
-        age >= 0 && age <= ORACLE_MAX_STALENESS_SECS,
+        age >= 0 && age <= config.max_staleness_secs,
         MeridianError::OraclesStale
     );
 
@@ -70,13 +71,13 @@ pub fn handler(ctx: Context<SettleMarket>) -> Result<()> {
     require!(oracle.price >= 0, MeridianError::OracleNegativePrice);
     let price_abs = oracle.price as u128;
 
-    // Confidence: conf / |price| <= 0.005
-    // i.e. conf * 1000 <= |price| * 5
+    // Confidence: conf / |price| <= config.max_confidence_bps / 10_000
+    // i.e. conf * 10_000 <= |price| * max_confidence_bps   (CONFIGURABLE).
     let conf_check = (oracle.conf as u128)
-        .checked_mul(ORACLE_CONF_DENOM)
+        .checked_mul(10_000)
         .ok_or(MeridianError::MathOverflow)?;
     let price_check = price_abs
-        .checked_mul(ORACLE_CONF_NUMER)
+        .checked_mul(config.max_confidence_bps as u128)
         .ok_or(MeridianError::MathOverflow)?;
     require!(conf_check <= price_check, MeridianError::OracleConfidenceWide);
 

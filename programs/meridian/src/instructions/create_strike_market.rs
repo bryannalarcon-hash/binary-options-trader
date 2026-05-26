@@ -8,7 +8,7 @@ use anchor_spl::{
 };
 
 use crate::errors::MeridianError;
-use crate::state::{Config, Market, MockOracle, MAX_TICKER_LEN};
+use crate::state::{Config, Market, OracleAccount, MAX_TICKER_LEN};
 
 /// Create a per-strike binary-options market.
 ///
@@ -73,12 +73,12 @@ pub struct CreateStrikeMarket<'info> {
     )]
     pub vault: Box<Account<'info, TokenAccount>>,
 
-    /// Mock oracle for the underlying. Must already exist (init via `update_oracle`).
+    /// Oracle account for the underlying. Must already exist (init via `update_oracle`).
     #[account(
-        seeds = [MockOracle::SEED_PREFIX, ticker.as_bytes()],
+        seeds = [OracleAccount::SEED_PREFIX, ticker.as_bytes()],
         bump = oracle.bump,
     )]
-    pub oracle: Box<Account<'info, MockOracle>>,
+    pub oracle: Box<Account<'info, OracleAccount>>,
 
     #[account(mut)]
     pub payer: Signer<'info>,

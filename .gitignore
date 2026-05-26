@@ -13,6 +13,7 @@ node_modules/
 target/
 .anchor/
 .next/
+*.tsbuildinfo
 dist/
 build/
 
@@ -35,3 +36,14 @@ build/
 tests/test-results/
 playwright-report/
 test-results/
+screenshots/
+
+# Assignment brief + source material — not redistributable, not part of the repo
+project_1771969779565.pdf
+.meridian-zip-extracted/
+
+# Internal working docs — not part of the submission (session handoffs,
+# AI task breakdowns, internal research)
+docs/HANDOFF.md
+docs/CODING_PRD.md
+docs/PEAK6_RESEARCH.md

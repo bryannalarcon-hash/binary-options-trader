@@ -43,7 +43,7 @@ pub struct Market {
     /// USDC mint used for collateral.
     pub usdc_mint: Pubkey,
 
-    /// Mock oracle account (Pyth shape on localnet).
+    /// Oracle account holding the latest Pyth-sourced price for this ticker.
     pub oracle: Pubkey,
 
     /// Whether settle_market or admin_settle_override has fired.

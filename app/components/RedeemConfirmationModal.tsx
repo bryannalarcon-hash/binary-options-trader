@@ -6,12 +6,12 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { buildAndSendRedeem } from "@/lib/composite-tx";
 import { fmtUsdDollars } from "@/lib/format";
 import { notify } from "@/lib/notify";
-import type { MockPosition } from "@/lib/mock-data";
+import type { Position } from "@/lib/positions-client";
 
 import { ModalShell } from "./ModalShell";
 
 interface Props {
-  positions: MockPosition[];
+  positions: Position[];
   onClose: () => void;
   onComplete: () => void;
 }

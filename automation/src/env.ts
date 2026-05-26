@@ -2,9 +2,16 @@ import * as dotenv from "dotenv";
 import * as path from "path";
 
 // Load .env.local first (localnet overrides), then .env as fallback.
-// dotenv.config does NOT overwrite vars that are already set, so .env.local wins.
+// dotenv.config does NOT overwrite vars that are already set, so .env.local
+// wins when present, and Railway's container-injected env vars trump both.
 dotenv.config({ path: path.resolve(__dirname, "../../.env.local") });
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+
+// On Railway: PORT is injected by the platform — map it to AUTOMATION_HEALTH_PORT
+// so our health server binds to the right port without code changes.
+if (process.env.PORT && !process.env.AUTOMATION_HEALTH_PORT) {
+  process.env.AUTOMATION_HEALTH_PORT = process.env.PORT;
+}
 
 function req(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
@@ -16,6 +23,17 @@ function bool(name: string, fallback = false): boolean {
   const v = process.env[name];
   if (v === undefined) return fallback;
   return v === "1" || v.toLowerCase() === "true";
+}
+
+/**
+ * Read a boolean from the first env var that is set, scanning `names` in order.
+ * Used for backward-compatible renames (e.g. USE_HERMES_ORACLE ?? USE_MOCK_ORACLE).
+ */
+function boolAny(names: string[], fallback = false): boolean {
+  for (const name of names) {
+    if (process.env[name] !== undefined) return bool(name, fallback);
+  }
+  return fallback;
 }
 
 function num(name: string, fallback: number): number {
@@ -49,8 +67,14 @@ export const env = {
   ),
 
   // -------- Cron schedules --------
-  morningCron: process.env.AUTOMATION_MORNING_CRON || "0 12 * * 1-5",
-  settleCron: process.env.AUTOMATION_SETTLE_CRON || "5 20 * * 1-5",
+  // Expressions are interpreted in `cronTimezone` (default America/New_York),
+  // so they read as wall-clock ET regardless of the host TZ or DST. Morning
+  // job at 8:00 AM ET (before 9:30 open), settle at 4:05 PM ET (just after close).
+  morningCron: process.env.AUTOMATION_MORNING_CRON || "0 8 * * 1-5",
+  settleCron: process.env.AUTOMATION_SETTLE_CRON || "5 16 * * 1-5",
+  // IANA timezone the morning/settle crons are evaluated in. Pinning this to
+  // America/New_York means we never have to hand-convert to UTC or chase DST.
+  cronTimezone: process.env.AUTOMATION_CRON_TIMEZONE || "America/New_York",
 
   // -------- Settle retry tuning --------
   settleRetryInterval: num("AUTOMATION_SETTLE_RETRY_INTERVAL", 30),
@@ -72,7 +96,9 @@ export const env = {
   } as Record<string, string>,
 
   // -------- Dev toggles --------
-  useMockOracle: bool("USE_MOCK_ORACLE", false),
+  // Pull live prices from Pyth Hermes and write them on-chain via update_oracle.
+  // Backward-compat: honour the legacy USE_MOCK_ORACLE name if the new one is unset.
+  useHermesOracle: boolAny(["USE_HERMES_ORACLE", "USE_MOCK_ORACLE"], false),
   skipCalendarCheck: bool("SKIP_CALENDAR_CHECK", false),
   testBypassTimeGate: bool("TEST_BYPASS_TIME_GATE", false),
 

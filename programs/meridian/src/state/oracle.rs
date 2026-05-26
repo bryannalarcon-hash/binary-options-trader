@@ -2,17 +2,18 @@ use anchor_lang::prelude::*;
 
 use super::market::MAX_TICKER_LEN;
 
-/// Mock oracle account — mirrors the essentials of Pyth's `PriceUpdateV2`.
+/// On-chain oracle account — holds the latest Pyth-sourced price for a ticker,
+/// written by the oracle authority. Mirrors Pyth's `PriceUpdateV2` essentials.
 ///
-/// On localnet (no real Pyth program available), the automation service writes
-/// scripted prices into this account via `update_oracle`. The on-chain
-/// `settle_market` instruction reads `price`, `conf`, `publish_time`, `expo`
-/// exactly as it would for a Pyth pull oracle.
+/// The automation service pulls live prices from Pyth Hermes and writes them
+/// into this account via `update_oracle`. The on-chain `settle_market`
+/// instruction reads `price`, `conf`, `publish_time`, `expo` exactly as it
+/// would for a Pyth pull oracle.
 ///
 /// PDA: seeds = ["oracle", ticker_bytes].
 #[account]
 #[derive(InitSpace, Debug)]
-pub struct MockOracle {
+pub struct OracleAccount {
     /// ASCII ticker (matches the market's ticker).
     #[max_len(MAX_TICKER_LEN)]
     pub ticker: String,
@@ -37,6 +38,6 @@ pub struct MockOracle {
     pub bump: u8,
 }
 
-impl MockOracle {
+impl OracleAccount {
     pub const SEED_PREFIX: &'static [u8] = b"oracle";
 }

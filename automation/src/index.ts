@@ -4,7 +4,7 @@ import { env } from "./env";
 import { markEnd, markStart, startHealthServer } from "./health";
 import { runMorningJob } from "./jobs/morning";
 import { runSettleJob } from "./jobs/settle";
-import { runOracleUpdaterOnce } from "./jobs/update-mock-oracle";
+import { runOracleUpdaterOnce } from "./jobs/update-oracle";
 import { ctx, logger } from "./logger";
 
 /**
@@ -13,7 +13,7 @@ import { ctx, logger } from "./logger";
  * Registers cron jobs for:
  *  - Morning market creation (AUTOMATION_MORNING_CRON, default 8 AM ET weekdays)
  *  - Settlement (AUTOMATION_SETTLE_CRON, default 4:05 PM ET weekdays)
- *  - Mock-oracle updates (every ORACLE_UPDATE_INTERVAL_SECONDS while USE_MOCK_ORACLE=true)
+ *  - Oracle updates from Pyth Hermes (every ORACLE_UPDATE_INTERVAL_SECONDS while USE_HERMES_ORACLE=true)
  *
  * Also serves a JSON /health endpoint on AUTOMATION_HEALTH_PORT (default 3001).
  */
@@ -23,7 +23,7 @@ async function main(): Promise<void> {
     {
       cluster: env.cluster,
       rpcUrl: env.rpcUrl,
-      useMockOracle: env.useMockOracle,
+      useHermesOracle: env.useHermesOracle,
       skipCalendarCheck: env.skipCalendarCheck,
       morningCron: env.morningCron,
       settleCron: env.settleCron,
@@ -35,25 +35,34 @@ async function main(): Promise<void> {
   startHealthServer(env.healthPort);
 
   // -------- Morning job --------
-  cron.schedule(env.morningCron, () => {
-    void runJob("morning", runMorningJob);
-  });
-  log.info({ cron: env.morningCron }, "morning job scheduled");
+  // `timezone` makes the expression wall-clock ET (handles DST + non-UTC hosts).
+  cron.schedule(
+    env.morningCron,
+    () => {
+      void runJob("morning", runMorningJob);
+    },
+    { timezone: env.cronTimezone },
+  );
+  log.info({ cron: env.morningCron, tz: env.cronTimezone }, "morning job scheduled");
 
   // -------- Settle job --------
-  cron.schedule(env.settleCron, () => {
-    void runJob("settle", runSettleJob);
-  });
-  log.info({ cron: env.settleCron }, "settle job scheduled");
+  cron.schedule(
+    env.settleCron,
+    () => {
+      void runJob("settle", runSettleJob);
+    },
+    { timezone: env.cronTimezone },
+  );
+  log.info({ cron: env.settleCron, tz: env.cronTimezone }, "settle job scheduled");
 
-  // -------- Mock-oracle updater (localnet only) --------
-  if (env.useMockOracle) {
+  // -------- Hermes oracle updater (pulls live Pyth prices on-chain) --------
+  if (env.useHermesOracle) {
     const seconds = Math.max(5, env.oracleUpdateIntervalSeconds);
     const spec = `*/${seconds} * * * * *`;
     cron.schedule(spec, () => {
       void runJob("oracle", runOracleUpdaterOnce);
     });
-    log.info({ interval: seconds }, "mock-oracle updater scheduled");
+    log.info({ interval: seconds }, "hermes oracle updater scheduled");
   }
 
   log.info("automation service ready");

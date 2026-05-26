@@ -14,7 +14,7 @@ meridian = "DQgnoMXTD6Ebo7cgie6hpNjnVCtTnLVfjPcFc4JQZS19"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

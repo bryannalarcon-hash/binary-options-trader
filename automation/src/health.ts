@@ -1,5 +1,6 @@
 import * as http from "http";
 
+import { handleFaucet } from "./faucet";
 import { ctx } from "./logger";
 
 const log = ctx("health");
@@ -43,6 +44,10 @@ export function setNextRun(job: string, nextIso: string | undefined): void {
  */
 export function startHealthServer(port: number): http.Server {
   const server = http.createServer((req, res) => {
+    if (req.url === "/faucet") {
+      void handleFaucet(req, res);
+      return;
+    }
     if (req.url === "/health") {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(

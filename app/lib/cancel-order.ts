@@ -21,6 +21,8 @@ import type { WalletContextState } from "@solana/wallet-adapter-react";
 
 import { env } from "./env";
 import idl from "./meridian-idl.json";
+import { logTradeAction } from "./trade-log";
+import type { Ticker } from "./tickers";
 
 export type CancelSide = "bid" | "ask";
 
@@ -63,6 +65,60 @@ function buildProgram(
  * @returns        The confirmed tx signature.
  */
 export async function buildAndSendCancelOrder(
+  connection: Connection,
+  wallet: WalletContextState,
+  market: string,
+  side: CancelSide,
+  index: number,
+  /** Optional context for the local action log (when the caller knows it). */
+  meta?: { ticker?: Ticker; strike?: number; priceCents?: number; size?: number },
+): Promise<{ signature: string }> {
+  // Structured action log (observational only — does not affect tx logic).
+  // "cancel" maps the resting-order side (bid → yes, ask → no) for display.
+  const logSide = side === "bid" ? "yes" : "no";
+  logTradeAction({
+    action: "cancel",
+    ticker: meta?.ticker ?? "AAPL",
+    strike: meta?.strike ?? 0,
+    side: logSide,
+    qty: meta?.size ?? 0,
+    priceCents: meta?.priceCents ?? null,
+    feeCents: 0,
+    txSig: null,
+    status: "submitted",
+  });
+  try {
+    const res = await cancelOrderInner(connection, wallet, market, side, index);
+    logTradeAction({
+      action: "cancel",
+      ticker: meta?.ticker ?? "AAPL",
+      strike: meta?.strike ?? 0,
+      side: logSide,
+      qty: meta?.size ?? 0,
+      priceCents: meta?.priceCents ?? null,
+      feeCents: 0,
+      txSig: res.signature,
+      status: "confirmed",
+    });
+    return res;
+  } catch (err) {
+    logTradeAction({
+      action: "cancel",
+      ticker: meta?.ticker ?? "AAPL",
+      strike: meta?.strike ?? 0,
+      side: logSide,
+      qty: meta?.size ?? 0,
+      priceCents: meta?.priceCents ?? null,
+      feeCents: 0,
+      txSig: null,
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+async function cancelOrderInner(
   connection: Connection,
   wallet: WalletContextState,
   market: string,

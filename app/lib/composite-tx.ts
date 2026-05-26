@@ -48,6 +48,7 @@ import {
   Transaction,
   TransactionInstruction,
   SYSVAR_RENT_PUBKEY,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
 } from "@solana/web3.js";
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 
@@ -55,6 +56,7 @@ import type { Side } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
 import type { Ticker } from "./tickers";
+import { logTradeAction } from "./trade-log";
 
 export interface BuildTradeArgs {
   ticker: Ticker;
@@ -74,6 +76,10 @@ export interface TradeResult {
   avgFillCents: number;
   /** Net USDC moved (positive = paid, negative = received), in cents. */
   netUsdcCents: number;
+  /** Tokens that crossed an existing maker (excludes any resting remainder). */
+  filledSize?: number;
+  /** Tokens left resting on the book (limit orders only — market orders never rest). */
+  restingSize?: number;
 }
 
 export interface BuildRedeemArgs {
@@ -319,12 +325,16 @@ export function findBestCounterparty(
   ob: OnchainOrderBook,
   takerSide: "bid" | "ask",
   limitPriceCents: number,
+  excludeOwner?: PublicKey,
 ): { index: number; order: OnchainOrder } | null {
   const candidates = takerSide === "bid" ? ob.asks : ob.bids;
   let best: { index: number; order: OnchainOrder } | null = null;
   for (let i = 0; i < candidates.length; i++) {
     const o = candidates[i];
     if (!o || isEmptyOrder(o)) continue;
+    // Never cross your own resting order — the contract rejects self-trades
+    // (place_order.rs: NotOrderOwner). Skip so the taker rests instead.
+    if (excludeOwner && o.owner.equals(excludeOwner)) continue;
     if (takerSide === "bid" && o.price > limitPriceCents) continue;
     if (takerSide === "ask" && o.price < limitPriceCents) continue;
     if (best == null) {
@@ -350,13 +360,18 @@ export function findBestCounterparty(
 interface PlaceOrderAccounts {
   market: PublicKey;
   yesMint: PublicKey;
+  noMint: PublicKey;
   usdcMint: PublicKey;
   user: PublicKey;
   /** ATAs */
   userUsdc: PublicKey;
   userYes: PublicKey;
+  /** User's NO ATA — read by the contract's book-path position guard. */
+  userNo: PublicKey;
   counterpartyUsdc: PublicKey;
   counterpartyYes: PublicKey;
+  /** ATA of config.fee_destination for the USDC mint — where taker fees route. */
+  feeDestinationUsdc: PublicKey;
 }
 
 /**
@@ -380,19 +395,44 @@ export async function buildPlaceOrderIx(
       market: accounts.market,
       orderbook: orderbookPda(programId, accounts.market),
       yesMint: accounts.yesMint,
+      noMint: accounts.noMint,
       usdcMint: accounts.usdcMint,
       userUsdc: accounts.userUsdc,
       userYes: accounts.userYes,
+      userNo: accounts.userNo,
       counterpartyUsdc: accounts.counterpartyUsdc,
       counterpartyYes: accounts.counterpartyYes,
       usdcEscrow: usdcEscrowPda(programId, accounts.market),
       yesEscrow: yesEscrowPda(programId, accounts.market),
+      feeDestinationUsdc: accounts.feeDestinationUsdc,
       user: accounts.user,
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
       rent: SYSVAR_RENT_PUBKEY,
+      instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
     })
     .instruction();
+}
+
+/**
+ * Resolve the fee-destination USDC ATA from the on-chain config
+ * (`config.fee_destination`). Required by `place_order`; the contract routes the
+ * parabolic taker fee here. Cached per (program, mint) for the session.
+ */
+const _feeDestCache = new Map<string, PublicKey>();
+export async function getFeeDestinationUsdc(
+  program: Program,
+  usdcMint: PublicKey,
+): Promise<PublicKey> {
+  const cacheKey = `${program.programId.toBase58()}:${usdcMint.toBase58()}`;
+  const hit = _feeDestCache.get(cacheKey);
+  if (hit) return hit;
+  const cfg = (await (program.account as any).config.fetch(
+    configPda(program.programId),
+  )) as { feeDestination: PublicKey };
+  const ata = getAssociatedTokenAddressSync(usdcMint, cfg.feeDestination, true);
+  _feeDestCache.set(cacheKey, ata);
+  return ata;
 }
 
 /**
@@ -418,7 +458,9 @@ interface SweepReport {
  *
  * If no level crosses (or only partial), the remainder rests on the book
  * via a final place_order with the user's own ATAs as counterparty
- * placeholders.
+ * placeholders — UNLESS `immediateOrCancel` is set (market orders), in which
+ * case the unfilled remainder is dropped (never rested) so a market order
+ * can't silently become a resting bid at the 99¢ cap on an empty book.
  *
  * @returns Aggregate fill report.
  */
@@ -433,9 +475,13 @@ export async function sweepCrossableLevels(
   takerSide: "bid" | "ask",
   totalSize: number,
   limitPriceCents: number,
+  immediateOrCancel = false,
 ): Promise<SweepReport> {
+  const noMint = noMintPda(program.programId, market);
   const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
   const userYes = getAssociatedTokenAddressSync(yesMint, user);
+  const userNo = getAssociatedTokenAddressSync(noMint, user);
+  const feeDestinationUsdc = await getFeeDestinationUsdc(program, usdcMint);
 
   let remaining = totalSize;
   let lastSig = "";
@@ -444,12 +490,15 @@ export async function sweepCrossableLevels(
   let restingSize = 0;
   let txCount = 0;
 
-  // Pre-build the ATA-create ix once (idempotent on each tx).
+  // Pre-build the ATA-create ix once (idempotent on each tx). The NO ATA is
+  // included because place_order's position guard reads `user_no` as a token
+  // account — it must exist even for a plain Buy-Yes that holds no NO.
   function ataCreateTx(): Transaction {
     const tx = new Transaction();
     tx.add(
       createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
       createAssociatedTokenAccountIdempotentInstruction(user, userYes, user, yesMint),
+      createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
     );
     return tx;
   }
@@ -457,60 +506,81 @@ export async function sweepCrossableLevels(
   for (let iter = 0; iter < MAX_SWEEP_ITERATIONS && remaining > 0; iter++) {
     const ob = await fetchOrderBook(program, market);
     const match =
-      ob != null ? findBestCounterparty(ob, takerSide, limitPriceCents) : null;
+      ob != null
+        ? findBestCounterparty(ob, takerSide, limitPriceCents, user)
+        : null;
 
-    let cpUsdc = userUsdc;
-    let cpYes = userYes;
-    let thisChunk = remaining;
-    let crossing = false;
-    let matchPrice = limitPriceCents;
-
-    if (match) {
-      crossing = true;
-      matchPrice = match.order.price;
-      thisChunk = Math.min(remaining, match.order.size.toNumber());
-      // Counterparty ATAs depend on which side is being filled:
-      // - taker bid → maker is on asks → maker holds YES escrow + receives USDC.
-      //   `counterparty_usdc` must be the maker's USDC ATA, `counterparty_yes`
-      //   is a placeholder (set to user_yes).
-      // - taker ask → maker is on bids → maker receives YES + has USDC in escrow.
-      //   `counterparty_yes` must be the maker's YES ATA.
-      const makerUsdc = getAssociatedTokenAddressSync(usdcMint, match.order.owner);
-      const makerYes = getAssociatedTokenAddressSync(yesMint, match.order.owner);
-      if (takerSide === "bid") {
-        cpUsdc = makerUsdc;
-        cpYes = userYes; // unused, placeholder
-      } else {
-        cpYes = makerYes;
-        cpUsdc = userUsdc; // unused, placeholder
+    if (!match) {
+      // Nothing crosses at our limit price right now.
+      if (immediateOrCancel) {
+        // Market order: fill-or-kill the remainder. We DON'T rest it — a
+        // market order must never silently become a resting bid/ask (e.g. a
+        // Buy-Yes on an empty book parking at the 99¢ cap). Drop it; the
+        // caller reports the partial/zero fill.
+        break;
       }
+      // Limit order: rest the remainder on the book (user's own ATAs as
+      // counterparty placeholders — no cross expected).
+      const restIx = await buildPlaceOrderIx(
+        program,
+        {
+          market,
+          yesMint,
+          noMint,
+          usdcMint,
+          user,
+          userUsdc,
+          userYes,
+          userNo,
+          counterpartyUsdc: userUsdc,
+          counterpartyYes: userYes,
+          feeDestinationUsdc,
+        },
+        takerSide,
+        limitPriceCents,
+        remaining,
+      );
+      const restTx = ataCreateTx();
+      restTx.add(restIx);
+      lastSig = await provider.sendAndConfirm(restTx);
+      txCount += 1;
+      restingSize += remaining;
+      remaining = 0;
+      break;
     }
 
-    // For the last (non-crossing) call we want to either:
-    //   (a) take whatever crosses and STOP, leaving remainder unsubmitted, OR
-    //   (b) rest the rest on the book via one final place_order.
-    // The contract handles both: if the user wants to rest, they pass the
-    // remaining size and `place_order` will fill the cross AND rest. To keep
-    // a clean per-iteration accounting we use the simpler approach: each call
-    // only submits the cross-able chunk; the LAST call submits the remainder
-    // with the user's own ATAs as placeholders (no cross expected).
-    const sizeForThisCall = crossing ? thisChunk : remaining;
+    // A crossable maker exists — take its level.
+    const matchPrice = match.order.price;
+    const thisChunk = Math.min(remaining, match.order.size.toNumber());
+    // Counterparty ATAs depend on which side is being filled:
+    // - taker bid → maker is on asks → maker holds YES escrow + receives USDC.
+    //   `counterparty_usdc` must be the maker's USDC ATA, `counterparty_yes`
+    //   is a placeholder (set to user_yes).
+    // - taker ask → maker is on bids → maker receives YES + has USDC in escrow.
+    //   `counterparty_yes` must be the maker's YES ATA.
+    const makerUsdc = getAssociatedTokenAddressSync(usdcMint, match.order.owner);
+    const makerYes = getAssociatedTokenAddressSync(yesMint, match.order.owner);
+    const cpUsdc = takerSide === "bid" ? makerUsdc : userUsdc;
+    const cpYes = takerSide === "bid" ? userYes : makerYes;
 
     const ix = await buildPlaceOrderIx(
       program,
       {
         market,
         yesMint,
+        noMint,
         usdcMint,
         user,
         userUsdc,
         userYes,
+        userNo,
         counterpartyUsdc: cpUsdc,
         counterpartyYes: cpYes,
+        feeDestinationUsdc,
       },
       takerSide,
-      crossing ? matchPrice : limitPriceCents,
-      sizeForThisCall,
+      matchPrice,
+      thisChunk,
     );
 
     const tx = ataCreateTx();
@@ -518,30 +588,18 @@ export async function sweepCrossableLevels(
 
     // Send and confirm. If this throws we let it bubble — caller wraps in
     // try/catch and surfaces the error toast.
-    const sig = await provider.sendAndConfirm(tx);
-    lastSig = sig;
+    lastSig = await provider.sendAndConfirm(tx);
     txCount += 1;
 
-    if (crossing) {
-      filledSize += thisChunk;
-      filledNotional += thisChunk * matchPrice;
-      remaining -= thisChunk;
-      // Loop again — there may be another crossable level OR our resting
-      // portion went onto the book.
-      // NOTE: in practice if size > maker_size we expect both an immediate
-      // cross AND a rest in the same call (the contract supports that). We
-      // re-fetch on the next loop iter and decide there.
-      // But we passed `sizeForThisCall = thisChunk`, so no rest yet.
-    } else {
-      // Nothing crossed — the entire remaining rests on the book.
-      restingSize += remaining;
-      remaining = 0;
-    }
+    filledSize += thisChunk;
+    filledNotional += thisChunk * matchPrice;
+    remaining -= thisChunk;
   }
 
-  // If we somehow exited the loop with remaining > 0 (only happens if all 5
-  // iters crossed and we still owe size) submit one final resting tx.
-  if (remaining > 0) {
+  // If we exited the loop with remaining > 0 (all iters crossed and we still
+  // owe size) rest the remainder — EXCEPT for a market order, which never
+  // rests (drop the unfilled tail).
+  if (remaining > 0 && !immediateOrCancel) {
     const ix = await buildPlaceOrderIx(
       program,
       {
@@ -553,6 +611,7 @@ export async function sweepCrossableLevels(
         userYes,
         counterpartyUsdc: userUsdc,
         counterpartyYes: userYes,
+        feeDestinationUsdc,
       },
       takerSide,
       limitPriceCents,
@@ -562,6 +621,7 @@ export async function sweepCrossableLevels(
     tx.add(
       createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
       createAssociatedTokenAccountIdempotentInstruction(user, userYes, user, yesMint),
+      createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
       ix,
     );
     const sig = await provider.sendAndConfirm(tx);
@@ -613,6 +673,55 @@ export async function buildAndSendTrade(
   wallet: WalletContextState,
   args: BuildTradeArgs,
 ): Promise<TradeResult> {
+  // Structured action logging (observational — does NOT touch tx logic).
+  const logAction = args.intent === "buy" ? "buy" : "sell";
+  logTradeAction({
+    action: logAction,
+    ticker: args.ticker,
+    strike: args.strike,
+    side: args.side,
+    qty: args.quantity,
+    priceCents: args.limitPriceCents ?? null,
+    feeCents: null,
+    txSig: null,
+    status: "submitted",
+  });
+  try {
+    const res = await buildAndSendTradeInner(connection, wallet, args);
+    logTradeAction({
+      action: logAction,
+      ticker: args.ticker,
+      strike: args.strike,
+      side: args.side,
+      qty: args.quantity,
+      priceCents: res.avgFillCents,
+      feeCents: null,
+      txSig: res.signature,
+      status: "confirmed",
+    });
+    return res;
+  } catch (err) {
+    logTradeAction({
+      action: logAction,
+      ticker: args.ticker,
+      strike: args.strike,
+      side: args.side,
+      qty: args.quantity,
+      priceCents: args.limitPriceCents ?? null,
+      feeCents: null,
+      txSig: null,
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+async function buildAndSendTradeInner(
+  connection: Connection,
+  wallet: WalletContextState,
+  args: BuildTradeArgs,
+): Promise<TradeResult> {
   const user = requireWallet(wallet);
 
   const built = buildProgram(connection, wallet);
@@ -651,6 +760,7 @@ export async function buildAndSendTrade(
       { ata: userYes, mint: yesMint },
     ]);
 
+    const isMarket = args.orderType === "market";
     const report = await sweepCrossableLevels(
       connection,
       program,
@@ -662,7 +772,18 @@ export async function buildAndSendTrade(
       takerSide,
       args.quantity,
       limitCents,
+      isMarket, // immediate-or-cancel: a market order never rests on the book
     );
+
+    // A market order that crossed nothing means there's no liquidity. We do NOT
+    // rest it (that's what produced the misleading "Buy at 99¢" bid on an empty
+    // book) — instead surface a clear, actionable error.
+    if (isMarket && report.filledSize === 0) {
+      throw new Error(
+        `No liquidity to ${args.intent} ${args.side.toUpperCase()} at market on this strike. ` +
+          `The book is empty — place a LIMIT order to set your price and make a market.`,
+      );
+    }
 
     const totalQty = report.filledSize + report.restingSize;
     const avg = totalQty > 0
@@ -673,7 +794,13 @@ export async function buildAndSendTrade(
     const sign = args.intent === "buy" ? 1 : -1;
     // Net USDC for a buy = avg * quantity (paid); for a sell = -avg * quantity (received).
     const netUsdcCents = sign * avg * totalQty;
-    return { signature: report.signature, avgFillCents: avg, netUsdcCents };
+    return {
+      signature: report.signature,
+      avgFillCents: avg,
+      netUsdcCents,
+      filledSize: report.filledSize,
+      restingSize: report.restingSize,
+    };
   }
 
   // --- Side = "no" → composite flows ---
@@ -862,41 +989,14 @@ async function mintPairAndSellYes(
   return sellReport.signature || mintSig;
 }
 
-/**
- * Sell NO composite: buy YES on the book + redeem_pair(qty).
- * Returns the signature of the LAST tx (the redeem_pair).
- */
-async function buyYesAndRedeemPair(
-  connection: Connection,
-  provider: AnchorProvider,
+/** Build a redeem_pair instruction (burn qty YES + qty NO → qty USDC). */
+async function buildRedeemPairIx(
   program: Program,
   programId: PublicKey,
   accts: MarketAccounts,
   qty: number,
-  yesBidLimitCents: number,
-): Promise<string> {
-  // Step 1 — buy qty YES on the book.
-  await ensureUserAtas(provider, accts.user, [
-    { ata: accts.userUsdc, mint: accts.usdcMint },
-    { ata: accts.userYes, mint: accts.yesMint },
-    { ata: accts.userNo, mint: accts.noMint },
-  ]);
-  await sweepCrossableLevels(
-    connection,
-    program,
-    provider,
-    accts.market,
-    accts.yesMint,
-    accts.usdcMint,
-    accts.user,
-    "bid",
-    qty,
-    yesBidLimitCents,
-  );
-
-  // Step 2 — redeem_pair(qty): burn qty YES + qty NO from user → qty USDC back.
-  const redeemTx = new Transaction();
-  const redeemIx = await (program.methods as any)
+): Promise<TransactionInstruction> {
+  return (program.methods as any)
     .redeemPair(new BN(qty))
     .accounts({
       config: configPda(programId),
@@ -912,8 +1012,118 @@ async function buyYesAndRedeemPair(
       tokenProgram: TOKEN_PROGRAM_ID,
     })
     .instruction();
-  redeemTx.add(redeemIx);
-  return provider.sendAndConfirm(redeemTx);
+}
+
+/**
+ * Build an assert_single_sided instruction (the contract's book-path position
+ * guard). Placed LAST in a transaction, it reverts the whole tx if the signer
+ * still holds both YES and NO for `market` — proving the transient was unwound.
+ */
+async function buildAssertSingleSidedIx(
+  program: Program,
+  accts: MarketAccounts,
+): Promise<TransactionInstruction> {
+  return (program.methods as any)
+    .assertSingleSided()
+    .accounts({
+      market: accts.market,
+      yesMint: accts.yesMint,
+      noMint: accts.noMint,
+      userYes: accts.userYes,
+      userNo: accts.userNo,
+      user: accts.user,
+    })
+    .instruction();
+}
+
+/**
+ * Sell NO composite (TAKER-ONLY). Per crossable ask level, submit ONE ATOMIC
+ * transaction: [buy `chunk` YES against that maker] + [redeem_pair(chunk)] +
+ * [assert_single_sided]. Each tx ends single-sided (the YES is bought and
+ * immediately burned), so the buyer is never left holding both YES and NO
+ * across a tx boundary — which is exactly what the contract's place_order guard
+ * now requires for a Bid that acquires YES while holding NO.
+ *
+ * We never REST a YES bid here: a resting bid filled later (in another user's
+ * transaction) while we hold NO would create an unguarded both-sides state.
+ * If nothing crosses, Sell-NO stops (no liquidity) rather than parking a bid.
+ *
+ * Returns the LAST tx signature, or throws if no liquidity filled at all.
+ */
+async function buyYesAndRedeemPair(
+  _connection: Connection,
+  provider: AnchorProvider,
+  program: Program,
+  programId: PublicKey,
+  accts: MarketAccounts,
+  qty: number,
+  yesBidLimitCents: number,
+): Promise<string> {
+  await ensureUserAtas(provider, accts.user, [
+    { ata: accts.userUsdc, mint: accts.usdcMint },
+    { ata: accts.userYes, mint: accts.yesMint },
+    { ata: accts.userNo, mint: accts.noMint },
+  ]);
+
+  const feeDestinationUsdc = await getFeeDestinationUsdc(program, accts.usdcMint);
+  let remaining = qty;
+  let lastSig = "";
+
+  for (let iter = 0; iter < MAX_SWEEP_ITERATIONS && remaining > 0; iter++) {
+    const ob = await fetchOrderBook(program, accts.market);
+    const match =
+      ob != null
+        ? findBestCounterparty(ob, "bid", yesBidLimitCents, accts.user)
+        : null;
+    if (!match) break; // taker-only: no ask crosses → stop, don't rest
+
+    const matchPrice = match.order.price;
+    const chunk = Math.min(remaining, match.order.size.toNumber());
+    // Taker bid → maker is on the ask side → maker receives USDC.
+    const makerUsdc = getAssociatedTokenAddressSync(accts.usdcMint, match.order.owner);
+
+    const buyIx = await buildPlaceOrderIx(
+      program,
+      {
+        market: accts.market,
+        yesMint: accts.yesMint,
+        noMint: accts.noMint,
+        usdcMint: accts.usdcMint,
+        user: accts.user,
+        userUsdc: accts.userUsdc,
+        userYes: accts.userYes,
+        userNo: accts.userNo,
+        counterpartyUsdc: makerUsdc,
+        counterpartyYes: accts.userYes, // placeholder (unused on a bid)
+        feeDestinationUsdc,
+      },
+      "bid",
+      matchPrice,
+      chunk,
+    );
+    const redeemIx = await buildRedeemPairIx(program, programId, accts, chunk);
+    const assertIx = await buildAssertSingleSidedIx(program, accts);
+
+    const tx = new Transaction();
+    tx.add(
+      createAssociatedTokenAccountIdempotentInstruction(accts.user, accts.userUsdc, accts.user, accts.usdcMint),
+      createAssociatedTokenAccountIdempotentInstruction(accts.user, accts.userYes, accts.user, accts.yesMint),
+      createAssociatedTokenAccountIdempotentInstruction(accts.user, accts.userNo, accts.user, accts.noMint),
+      buyIx,
+      redeemIx,
+      assertIx,
+    );
+    lastSig = await provider.sendAndConfirm(tx);
+    remaining -= chunk;
+  }
+
+  if (remaining === qty) {
+    throw new Error(
+      "No liquidity to sell NO at your limit right now — selling NO needs a YES seller " +
+        "to take. Try a different price, or hold the position to settlement.",
+    );
+  }
+  return lastSig;
 }
 
 /**
@@ -980,6 +1190,53 @@ export async function buildCloseAndReverseTrade(
  * vault and receives `amountPairs` YES + `amountPairs` NO tokens.
  */
 export async function buildAndSendMintPair(
+  connection: Connection,
+  wallet: WalletContextState,
+  args: { ticker: Ticker; strike: number; amountPairs: number },
+): Promise<{ signature: string }> {
+  logTradeAction({
+    action: "mint_pair",
+    ticker: args.ticker,
+    strike: args.strike,
+    side: null,
+    qty: args.amountPairs,
+    priceCents: 100,
+    feeCents: 0,
+    txSig: null,
+    status: "submitted",
+  });
+  try {
+    const res = await buildAndSendMintPairInner(connection, wallet, args);
+    logTradeAction({
+      action: "mint_pair",
+      ticker: args.ticker,
+      strike: args.strike,
+      side: null,
+      qty: args.amountPairs,
+      priceCents: 100,
+      feeCents: 0,
+      txSig: res.signature,
+      status: "confirmed",
+    });
+    return res;
+  } catch (err) {
+    logTradeAction({
+      action: "mint_pair",
+      ticker: args.ticker,
+      strike: args.strike,
+      side: null,
+      qty: args.amountPairs,
+      priceCents: 100,
+      feeCents: 0,
+      txSig: null,
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
+
+async function buildAndSendMintPairInner(
   connection: Connection,
   wallet: WalletContextState,
   args: { ticker: Ticker; strike: number; amountPairs: number },
@@ -1051,6 +1308,20 @@ export async function buildAndSendRedeem(
 ): Promise<RedeemResult> {
   const user = requireWallet(wallet);
 
+  for (const m of args.markets) {
+    logTradeAction({
+      action: "redeem",
+      ticker: m.ticker,
+      strike: m.strike,
+      side: m.side,
+      qty: m.quantity,
+      priceCents: m.quantity > 0 ? Math.round(m.payoutCents / m.quantity) : null,
+      feeCents: 0,
+      txSig: null,
+      status: "submitted",
+    });
+  }
+
   const built = buildProgram(connection, wallet);
   if (!built || !env.usdcMint) {
     const sig = await simulate(
@@ -1065,46 +1336,73 @@ export async function buildAndSendRedeem(
   let lastSig = "";
 
   for (const m of args.markets) {
-    const found = await findMarketExpiry(program, programId, m.ticker, m.strike);
-    if (!found) {
-      throw new Error(
-        `Market ${m.ticker} @ $${(m.strike / 100).toFixed(2)} not found on-chain`,
+    try {
+      const found = await findMarketExpiry(program, programId, m.ticker, m.strike);
+      if (!found) {
+        throw new Error(
+          `Market ${m.ticker} @ $${(m.strike / 100).toFixed(2)} not found on-chain`,
+        );
+      }
+      const market = found.market;
+      const yesMint = yesMintPda(programId, market);
+      const noMint = noMintPda(programId, market);
+      const vault = getAssociatedTokenAddressSync(usdcMint, market, true);
+      const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
+      const userYes = getAssociatedTokenAddressSync(yesMint, user);
+      const userNo = getAssociatedTokenAddressSync(noMint, user);
+
+      const tx = new Transaction();
+      tx.add(
+        createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
+        createAssociatedTokenAccountIdempotentInstruction(user, userYes, user, yesMint),
+        createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
       );
+
+      const sideEnum = m.side === "yes" ? { yes: {} } : { no: {} };
+      const redeemIx = await (program.methods as any)
+        .redeem(sideEnum, new BN(m.quantity))
+        .accounts({
+          market,
+          yesMint,
+          noMint,
+          usdcMint,
+          vault,
+          userUsdc,
+          userYes,
+          userNo,
+          user,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction();
+      tx.add(redeemIx);
+
+      lastSig = await provider.sendAndConfirm(tx);
+      logTradeAction({
+        action: "redeem",
+        ticker: m.ticker,
+        strike: m.strike,
+        side: m.side,
+        qty: m.quantity,
+        priceCents: m.quantity > 0 ? Math.round(m.payoutCents / m.quantity) : null,
+        feeCents: 0,
+        txSig: lastSig,
+        status: "confirmed",
+      });
+    } catch (err) {
+      logTradeAction({
+        action: "redeem",
+        ticker: m.ticker,
+        strike: m.strike,
+        side: m.side,
+        qty: m.quantity,
+        priceCents: null,
+        feeCents: 0,
+        txSig: null,
+        status: "failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
     }
-    const market = found.market;
-    const yesMint = yesMintPda(programId, market);
-    const noMint = noMintPda(programId, market);
-    const vault = getAssociatedTokenAddressSync(usdcMint, market, true);
-    const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
-    const userYes = getAssociatedTokenAddressSync(yesMint, user);
-    const userNo = getAssociatedTokenAddressSync(noMint, user);
-
-    const tx = new Transaction();
-    tx.add(
-      createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
-      createAssociatedTokenAccountIdempotentInstruction(user, userYes, user, yesMint),
-      createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
-    );
-
-    const sideEnum = m.side === "yes" ? { yes: {} } : { no: {} };
-    const redeemIx = await (program.methods as any)
-      .redeem(sideEnum, new BN(m.quantity))
-      .accounts({
-        market,
-        yesMint,
-        noMint,
-        usdcMint,
-        vault,
-        userUsdc,
-        userYes,
-        userNo,
-        user,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .instruction();
-    tx.add(redeemIx);
-
-    lastSig = await provider.sendAndConfirm(tx);
   }
 
   const totalPayoutCents = args.markets.reduce((a, m) => a + m.payoutCents, 0);

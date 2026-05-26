@@ -134,14 +134,23 @@ price levels the client uses `sweepCrossableLevels`:
 5. Any unfilled remainder is submitted in one final non-crossing tx so
    the leftover size rests on the book.
 
-### Mock fallback behavior
+### No mock fallback (as of 2026-05-24 de-mock)
 
-When `env.programId` is unset, an RPC call throws, or the OrderBook PDA
-doesn't exist yet (newer market not yet `init_market_books`'d), the hooks
-fall back to deterministic mock data so the UI keeps rendering. This is
-intentional dev UX preservation, NOT a silent simulation of the trade
-flows themselves — trade-flow `simulate()` calls fire ONLY when the
-program is missing entirely.
+The display layer no longer falls back to synthetic data. `mock-data.ts`
+was deleted. The data hooks now expose honest states:
+
+- **Loading** while the on-chain read is in flight.
+- **Empty** with an explicit message ("No active markets", "Order book is
+  empty") when the real read returns nothing.
+- **Error** when an RPC call fails — surfaced, not masked.
+
+Spot prices read the on-chain `OracleAccount` PDA (`["oracle", ticker]`,
+price in cents). Strikes read real `Market` PDAs. Yes/No prices come from
+the real order-book mid (or a clearly-flagged estimate when a book is
+empty). Volumes come from real `OrderMatched` events. Cost basis/P&L are
+derived from real fills (or shown as "—" when unknown — never guessed).
+Trade-flow `simulate()` still exists ONLY as a guard for when the program
+ID is entirely unconfigured; it never fires on the deployed devnet site.
 
 ## Logs
 
@@ -172,11 +181,10 @@ tail -f .app.log .automation.log
 
 ## Known issues / quirks
 
-1. **First-render markets data is mock.** The on-chain `program.account.market.all()`
-   call happens in `useEffect` (client-side), so the SSR HTML always contains
-   mock tickers + prices. The browser swaps in real on-chain markets within
-   one polling tick (~10s). Cards may briefly show the same tickers but a
-   different strike grid before settling.
+1. **First render shows a loading/empty state, then real data.** The on-chain
+   reads happen in `useEffect` (client-side), so SSR HTML renders the loading
+   skeleton (not mock data anymore). The browser swaps in real on-chain markets
+   + oracle spot within one polling tick (~10s).
 2. **Anchor tests partially fail (9 pass / 21 fail / 23 pending).** The
    integration tests in `tests/anchor/meridian.test.ts` expect a *clean*
    validator (they want to `initialize_config` against their own freshly
@@ -204,9 +212,14 @@ tail -f .app.log .automation.log
 
 ## Test results snapshot
 
+See `docs/TEST_RESULTS.md` for the authoritative run. As of 2026-05-24, against
+a fresh localnet via `scripts/run-anchor-tests.sh`:
+
 ```
-Anchor:    9 passing, 21 failing (clean-validator dependency), 23 pending
-Playwright: 6 passed, 16 skipped (.fixme), 5 failed (copy mismatches)
+Anchor core (meridian.test.ts):  31 passing / 0 failing
+Invariant + at-strike (math):     5 passing / 0 failing
+Harness-mismatch suites:          gated behind MERIDIAN_RUN_HARNESS_SUITES=1
+                                  (stale account model; same behaviors green above)
 ```
 
 ## Recommended demo flow
@@ -225,3 +238,59 @@ Playwright: 6 passed, 16 skipped (.fixme), 5 failed (copy mismatches)
 7. (Optional, real on-chain) Run `pnpm --filter automation morning` to see
    bundled `create_strike_market` + `init_market_books` calls in
    `.automation.log`.
+
+---
+
+## Demo video script (recordable — local stack)
+
+> The required "Demo Video" deliverable. This is a shot-by-shot script for the
+> **local** deployment: run `make e2e-up` + `pnpm mm:seed`, then record against
+> **http://localhost:3000**. Target length ~3-4 min. Everything shown is real
+> on-chain data (against the local validator) — narrate that explicitly. Connect
+> with the in-browser **Demo Wallet** and fund it from the local faucet; use the
+> **Admin (demo)** wallet at `/admin` for the oracle/settle steps (no extension
+> needed). Phantom/Solflare also work if pointed at a custom RPC of
+> `http://localhost:8899`.
+
+**Scene 1 — What it is (15s).** Landing page. Narrate: "Meridian — non-custodial
+binary options on Solana. 'Will a MAG7 stock close above a strike today?' Yes/No
+tokens that sum to $1, settled by an on-chain oracle."
+
+**Scene 2 — Real market data (30s).** Click **Markets**. Point out the live
+oracle spot per ticker (AAPL ~$309, GOOGL ~$383, etc.) and "40 active strikes".
+Narrate: "These prices are read from the on-chain OracleAccount, refreshed every
+~30s from Pyth Hermes — nothing is mocked." Open a card to show its real strike
+chain.
+
+**Scene 3 — Trade page (45s).** Open a strike (e.g. AAPL $300). Show: the real
+order book (empty book → "be the first to quote", an honest state), the parabolic
+taker fee that updates with price, the scenario simulator ($1 if it settles
+in-the-money, $0 if not), "On-chain CLOB", "Settles via Pyth". Connect the demo
+wallet (header shows the address + real devnet USDC balance).
+
+**Scene 4 — A real trade (40s).** Pick Buy YES, set a quantity, place the order.
+Approve in Phantom. When the toast confirms, open the Solana explorer link —
+narrate: "That's a real devnet transaction: an Anchor `place_order` against the
+deployed program." Show the **History → My actions** tab logging the trade, and
+the on-chain events tab.
+
+**Scene 5 — Mint / portfolio (25s).** Market Maker page → mint a pair (deposit 1
+USDC → 1 YES + 1 NO). Portfolio shows the real SPL token holdings; cost basis is
+derived from actual fills.
+
+**Scene 6 — Settlement lifecycle (40s).** Open **Admin** (import `keys/admin.json`).
+Push an oracle close price, then **Settle** a market. Switch to the holder wallet →
+Portfolio → **Redeem** the winning side for $1/token. Narrate the invariant:
+"YES + NO always redeem to exactly $1 — that's enforced on-chain and fuzz-tested
+over 1000 prices."
+
+**Scene 7 — Automation + close (20s).** Mention the cron service: creates markets
+at 8:00 AM ET, settles at 4:05 PM ET (timezone-pinned), refreshes the oracle every
+30s. Note the 9:30-4 ET trading-window awareness (shown on the trade panel).
+Close on the architecture one-liner: Rust/Anchor program + in-contract CLOB +
+custom Pyth-fed oracle + Next.js frontend, all on devnet.
+
+**Capture tips:** 1080p, hide bookmarks bar, pre-import wallets, pre-warm the site
+(first load fetches on-chain data — wait for the strike chains to populate before
+recording). `scripts/screenshot-site.ts` produces stills of every page if you want
+b-roll.

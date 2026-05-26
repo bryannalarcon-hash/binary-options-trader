@@ -112,20 +112,27 @@ if [[ -n "$EXISTING_MINT" ]]; then
 fi
 
 if [[ -z "$USDC_MINT" ]]; then
-  # `spl-token create-token` writes the new mint pubkey to stdout.
-  # Use admin keypair as the mint authority so bootstrap.ts can mint to users.
-  CREATE_OUT=$(spl-token create-token \
+  # Create the mint at a FIXED keypair so the USDC mint address is STABLE across
+  # validator resets. Without this every fresh validator produced a new mint,
+  # which kept resetting demo-wallet balances and breaking app/.env.local. The
+  # keypair is generated once and reused; admin is the mint authority.
+  MINT_KEY="$REPO_ROOT/keys/usdc-mint.json"
+  if [[ ! -f "$MINT_KEY" ]]; then
+    solana-keygen new --no-bip39-passphrase --silent --outfile "$MINT_KEY"
+    echo "    generated persistent mint keypair: $MINT_KEY"
+  fi
+  CREATE_OUT=$(spl-token create-token "$MINT_KEY" \
     --decimals 6 \
     --mint-authority "$ADMIN_KEY" \
     --fee-payer "$ADMIN_KEY" \
     --url "$RPC")
-  USDC_MINT=$(echo "$CREATE_OUT" | grep -oE 'Address:[[:space:]]+[A-Za-z0-9]+' | awk '{print $2}')
+  USDC_MINT=$(solana address --keypair "$MINT_KEY")
   if [[ -z "$USDC_MINT" ]]; then
-    echo "ERROR: failed to parse new mint address from output:" >&2
+    echo "ERROR: failed to derive mint address:" >&2
     echo "$CREATE_OUT" >&2
     exit 1
   fi
-  echo "    created fresh USDC mint: $USDC_MINT"
+  echo "    created USDC mint (stable address): $USDC_MINT"
 
   # Mint 1,000,000 USDC into the admin's ATA — used to fund user wallets in bootstrap.ts.
   spl-token create-account "$USDC_MINT" \
@@ -167,6 +174,25 @@ echo "[bootstrap-localnet] step 4/4 — running bootstrap.ts"
 export USDC_MINT="$USDC_MINT"
 export MERIDIAN_PROGRAM_ID="$PROGRAM_ID"
 "$REPO_ROOT/automation/node_modules/.bin/tsx" "$REPO_ROOT/scripts/bootstrap.ts"
+
+# ---------------------------------------------------------------------------
+# Step 5: ensure the fee-destination USDC ATA exists. place_order routes the
+# taker fee here and requires the account to exist; without it the first trade
+# reverts (AccountNotInitialized). Idempotent.
+# ---------------------------------------------------------------------------
+echo "[bootstrap-localnet] step 5 — fee-destination USDC ATA"
+FEE_DEST_KEY="$REPO_ROOT/keys/fee_destination.json"
+if [[ -f "$FEE_DEST_KEY" ]]; then
+  FEE_DEST_PUBKEY=$(solana address --keypair "$FEE_DEST_KEY")
+  write_env_var "FEE_DESTINATION_PUBKEY" "$FEE_DEST_PUBKEY"
+  SOLANA_RPC_URL="$RPC" USDC_MINT="$USDC_MINT" \
+    FEE_DESTINATION_PUBKEY="$FEE_DEST_PUBKEY" ADMIN_KEYPAIR_PATH="$ADMIN_KEY" \
+    "$REPO_ROOT/automation/node_modules/.bin/tsx" \
+    "$REPO_ROOT/scripts/create-fee-destination-ata.ts" \
+    || echo "    WARN: fee-destination ATA creation failed (trades may revert until created)"
+else
+  echo "    WARN: keys/fee_destination.json missing — skipping fee ATA"
+fi
 
 echo ""
 echo "[bootstrap-localnet] done."

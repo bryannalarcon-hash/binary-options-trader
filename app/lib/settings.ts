@@ -17,6 +17,8 @@ export interface MeridianSettings {
   theme: "system" | "light" | "dark";
   /** how many trades the user has placed (to know when to skip confirm modal). */
   tradesCompleted: number;
+  /** Default quick-bet trade size in USDC dollars (used by MarketCard ▲/▼). */
+  defaultBetSizeUsd: number;
 }
 
 export const DEFAULT_SETTINGS: MeridianSettings = {
@@ -25,6 +27,7 @@ export const DEFAULT_SETTINGS: MeridianSettings = {
   slippageBps: 100,
   theme: "dark",
   tradesCompleted: 0,
+  defaultBetSizeUsd: 5,
 };
 
 function readSettings(): MeridianSettings {

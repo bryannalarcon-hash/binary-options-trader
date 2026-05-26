@@ -2,7 +2,7 @@
 
 **Project:** Gauntlet Project — Meridian
 **Subtitle:** Binary Stock Outcome Markets on Blockchain
-**Source spec:** `project_1771969779565.pdf`
+**Source spec:** the Meridian project assignment brief (provided separately; not committed to this repo)
 **Status:** Draft v1 — incorporates research synthesis from competitive analysis (Polymarket, Kalshi, Augur, Manifold, Solana-native protocols)
 
 ---
@@ -88,7 +88,7 @@ The 7 stocks in V1 (the "MAG7"): AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA.
 - The contract permits transient pair-holding during the mint-pair operation; the UI enforces that this is not a persistent user-facing state.
 - Frontend MUST check the user's token balances before presenting trade options and guide them to exit their current position first.
 
-> **Note:** Competitive research showed that Polymarket allows holding both sides (with a CTF `mergePositions` recovery) and Kalshi silently auto-nets. The Meridian PRD takes a stricter stance — we honor it. To minimize friction, the UI offers a one-tap "close position then enter opposite side" flow that bundles both actions into a single signed transaction (see UX section).
+> **Note:** Competitive research showed that Polymarket allows holding both sides (with a CTF `mergePositions` recovery) and Kalshi silently auto-nets. The Meridian PRD takes a stricter stance — we honor it. To minimize friction, the UI offers a one-tap "close position then enter opposite side" flow that runs both actions as two back-to-back transactions (NOT atomic — the CLOB sweep can't reliably fit both legs in one tx; see UX section).
 
 ### 2.9 Required pages
 - **Landing** — product explanation, live prices, connect wallet CTA.
@@ -143,8 +143,12 @@ The 7 stocks in V1 (the "MAG7"): AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA.
 | Chain | **Solana devnet** (mainnet-beta as bonus) | PRD-preferred; sub-second finality is required for live order book trading; Pyth oracle has institutional MAG7 equity feeds; existing CLOB infrastructure (Phoenix) is mature; transaction fees ~$0.0003 keep micro-trades viable. |
 | Smart contract language | **Rust + Anchor** | PRD-preferred; Anchor gives IDL generation, account-validation macros, typed TS client; matches every reference implementation (Drift, OpenBook, Zeta, Hxro). |
 | On-chain order book | **Phoenix V1** (one market per strike) | Crankless atomic fills — no orphaned orders at 4 PM ET when markets close. MIT-licensed, OtterSec-audited, $75B+ cumulative volume. Permissionless market creation. Alternative considered: OpenBook V2 (requires crank); custom CLOB (6-month detour for no functional advantage). |
+
+> **Build note (as shipped):** Phoenix is **not** deployed on localnet/devnet, so the shipped build uses a **minimal in-program CLOB** instead of Phoenix CPI. Bid/ask arrays (size 16) live in an `OrderBook` PDA (`state/orderbook.rs`); orders match on-place inside the same Solana transaction (`instructions/place_order.rs`). Sub-second match is still achieved via Solana block time (~400ms). No Phoenix instruction is ever invoked.
 | Token model | **Two SPL mints per (stock, strike, date)**, mint authority held by market PDA | Standard Solana pattern; lets us use the SPL Token program for transfers/burns/mints. Each (stock, strike, date) is uniquely identified by its mint addresses. ~70–100 new mints/day at scale; rent-exempt deposits are cheap. |
 | Oracle | **Pyth Pull (PriceUpdateV2)** primary, **Switchboard** as documented fallback | Pyth already powers Polymarket's daily-close equity markets (April 2026, BusinessWire). Confirmed feeds for AAPL, NVDA, TSLA; MSFT/GOOGL/AMZN/META need verification before launch but are highly likely covered. Pyth feeds run ~24/5 (verified, contradicting earlier assumption). Use `get_price_no_older_than(clock, 30s, feed_id)` at settlement with confidence threshold. |
+
+> **Build note (as shipped):** The shipped build does **not** consume Pyth's on-chain `PriceUpdateV2` / Pull Receiver. Instead the automation service polls the **Pyth Hermes HTTP API** (`hermes.pyth.network`) every 30 s and writes prices into a custom `OracleAccount` PDA via `update_oracle`. `settle_market` reads that account with the same staleness + confidence checks. Prices still originate from Pyth; only the on-chain delivery mechanism differs. See `automation/src/jobs/update-mock-oracle.ts` and [README.md](../README.md) §architecture.
 | Settlement model | **Autonomous oracle settlement** (NOT multisig) | Drift's prediction-market multisig was compromised April 2026 for ~$285M — direct evidence that human-controlled settlement is fragile. Pyth confidence/staleness checks gate the autonomous settle; admin override exists only as fallback with 1-hour enforced delay per PRD. |
 | Account model | Market PDA + 2 mint PDAs + USDC vault ATA; per-user positions = SPL token balances | Mirrors every Solana DeFi reference. No per-user state on Meridian's side. PDAs derived deterministically from `(b"market", underlying, strike, expiry)`. |
 | Fee model | Taker peak 1.5% × `P × (1−P) × 4` (zero at extremes, 1.5% at 50/50); maker rebate 0.4% × same curve | Parabolic `P × (1−P)` curve is standard at Kalshi (0.07 × scale) and Polymarket Finance category (~1% peak). Splits the middle. Rebate incentivizes market makers — critical for liquidity bootstrapping at launch. Fee collection routed to a separate fee account (per PRD invariant 2.6). |
@@ -254,7 +258,7 @@ The bundled transaction is one signed action that:
 1. Sells (or redeems-pair, depending on inventory) the 50 No tokens.
 2. Submits a Buy Yes order at user's chosen price/size.
 
-This honors the PRD constraint (user is shown the prompt; opposite-side persistent holding is prevented) while keeping the flow to a single signature.
+This honors the PRD constraint (user is shown the prompt; opposite-side persistent holding is prevented) via a guided two-step flow: close the held side, then buy the opposite — two back-to-back transactions (not atomic).
 
 ### 5.4 Wallet integration
 - Connect via Phantom, Solflare, Backpack (standard Solana wallet adapter).
@@ -339,9 +343,11 @@ For each open contract:
 
 ## 7. Order book strategy
 
-Per PRD §3.2, two options exist: use an existing on-chain CLOB or build a minimal one. **Choice: Phoenix V1.**
+Per PRD §3.2, two options exist: use an existing on-chain CLOB or build a minimal one. **Original choice: Phoenix V1.**
 
-### 7.1 Phoenix integration
+> **As shipped:** the second option was taken. Phoenix is not available on localnet/devnet, so Meridian ships a **minimal in-program CLOB** (`state/orderbook.rs` + `instructions/place_order.rs`): fixed-size (16) bid/ask arrays in an `OrderBook` PDA, match-on-place within a single transaction, escrow held by the market PDA. The §7.1 Phoenix-CPI design below is retained for historical context; substitute "in-program order book" wherever it says "Phoenix".
+
+### 7.1 Phoenix integration (superseded — see build note above)
 - One Phoenix market per (stock, strike, date) — Yes token traded against USDC.
 - Meridian's smart contract calls Phoenix via CPI (Cross-Program Invocation) during `create_strike_market` to initialize the book.
 - Order placement/cancellation/match goes directly through Phoenix instructions; Meridian's contract handles only mint/burn/settle.
@@ -940,7 +946,7 @@ Every modal/dialog: trigger, content, action buttons, dismissal.
 > *"You currently hold [N] [No/Yes] tokens for [TICKER] > $[STRIKE]. To buy [Yes/No], you must close your [No/Yes] position first."*
 >
 > Two options:
-> - **Close [No/Yes] + Buy [Yes/No]** — bundled into one signed transaction (atomic)
+> - **Close [No/Yes] + Buy [Yes/No]** — two back-to-back transactions (sell, then buy; NOT atomic)
 > - **Cancel** — go back to trade panel unchanged
 
 **Actions:**

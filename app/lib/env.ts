@@ -28,4 +28,7 @@ export const env = {
   usdcMint: process.env.NEXT_PUBLIC_USDC_MINT || "",
   appName: process.env.NEXT_PUBLIC_APP_NAME || "Meridian",
   appUrl: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
+  // Automation faucet endpoint (devnet/localnet only) used to fund the demo
+  // burner wallet with SOL + test USDC. Empty disables the demo-wallet funding.
+  faucetUrl: process.env.NEXT_PUBLIC_FAUCET_URL || "",
 };

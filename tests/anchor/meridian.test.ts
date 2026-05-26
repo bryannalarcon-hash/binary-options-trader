@@ -17,8 +17,10 @@ import {
   PublicKey,
   SystemProgram,
   SYSVAR_RENT_PUBKEY,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   LAMPORTS_PER_SOL,
   Connection,
+  Transaction,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
@@ -77,7 +79,8 @@ describe("meridian", function () {
 
   const provider = AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = new Program(IDL as any, provider) as Program<any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const program: any = new Program(IDL as any, provider);
   const connection: Connection = provider.connection;
   const payer = (provider.wallet as anchor.Wallet).payer;
 
@@ -89,6 +92,10 @@ describe("meridian", function () {
   const user2 = Keypair.generate();
 
   let usdcMint: PublicKey;
+  // USDC ATA owned by the fee_destination — required by place_order's new
+  // parabolic taker-fee logic. Created once in `before()` and reused across
+  // every place_order test below.
+  let feeDestUsdc: PublicKey;
 
   // Per-ticker state used across tests.
   const TICKER = "AAPL";
@@ -106,6 +113,16 @@ describe("meridian", function () {
 
     // Mint a fresh USDC SPL token (6 decimals).
     usdcMint = await createMint(connection, payer, payer.publicKey, null, 6);
+
+    // Create the fee_destination's USDC ATA. The bootstrap script does this
+    // on devnet; for unit tests we make it explicit here.
+    const feeAta = await getOrCreateAssociatedTokenAccount(
+      connection,
+      payer,
+      usdcMint,
+      feeDest.publicKey,
+    );
+    feeDestUsdc = feeAta.address;
 
     oracle = oraclePDA(TICKER);
   });
@@ -153,7 +170,7 @@ describe("meridian", function () {
         .signers([oracleAuthority])
         .rpc();
 
-      const o: any = await (program.account as any).mockOracle.fetch(oracle);
+      const o: any = await (program.account as any).oracleAccount.fetch(oracle);
       expect(o.price.toString()).to.equal("23000");
       expect(o.ticker).to.equal(TICKER);
     });
@@ -423,15 +440,19 @@ describe("meridian", function () {
           market: MARKET,
           orderbook: ob,
           yesMint: YES_MINT,
+          noMint: NO_MINT,
           usdcMint,
           userUsdc: user1Atas.usdc,
           userYes: user1Atas.yes,
+          userNo: user1Atas.no,
           counterpartyUsdc: user1Atas.usdc, // placeholder
           counterpartyYes: user1Atas.yes,   // placeholder
           usdcEscrow: usdcEsc,
           yesEscrow: yesEsc,
+          feeDestinationUsdc: feeDestUsdc,
           user: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
         })
         .signers([user1])
         .rpc();
@@ -483,17 +504,21 @@ describe("meridian", function () {
             market: MARKET,
             orderbook: ob,
             yesMint: YES_MINT,
+            noMint: NO_MINT,
             usdcMint,
             userUsdc: user1Atas.usdc,
             userYes: user1Atas.yes,
+            userNo: user1Atas.no,
             counterpartyUsdc: user1Atas.usdc,
             counterpartyYes: user1Atas.yes,
             usdcEscrow: usdcEsc,
             yesEscrow: yesEsc,
+            feeDestinationUsdc: feeDestUsdc,
             user: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             rent: SYSVAR_RENT_PUBKEY,
+            instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
           })
           .signers([user1])
           .rpc();
@@ -515,17 +540,21 @@ describe("meridian", function () {
             market: MARKET,
             orderbook: ob,
             yesMint: YES_MINT,
+            noMint: NO_MINT,
             usdcMint,
             userUsdc: user1Atas.usdc,
             userYes: user1Atas.yes,
+            userNo: user1Atas.no,
             counterpartyUsdc: user1Atas.usdc,
             counterpartyYes: user1Atas.yes,
             usdcEscrow: usdcEsc,
             yesEscrow: yesEsc,
+            feeDestinationUsdc: feeDestUsdc,
             user: user1.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
             rent: SYSVAR_RENT_PUBKEY,
+            instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
           })
           .signers([user1])
           .rpc();
@@ -533,6 +562,213 @@ describe("meridian", function () {
       } catch (e: any) {
         expect(e.toString().toLowerCase()).to.match(/size|zero/);
       }
+    });
+  });
+
+  // ----------------------------------------------------------------------
+  // 7b. Parabolic taker fee — IMPLEMENTATION_PLAN §3 fee model
+  // ----------------------------------------------------------------------
+  //
+  // taker_fee_bps = 150 * 4 * price * (100 - price) / 10_000
+  //   p=50  -> 150 bps (1.5%)      PEAK
+  //   p=10  -> 150 * 4 * 10 * 90 / 10_000 = 54 bps
+  //   p=99  -> 150 * 4 * 99 *  1 / 10_000 =  5.94 bps  (truncated -> 5)
+  //   p= 1  -> symmetric to p=99
+  //
+  // We use a fresh market here so we don't fight the existing order-book
+  // state in §7. user1 rests the maker side; user2 takes against it.
+  describe("7b. parabolic taker fee on fill", () => {
+    let FEE_MARKET: PublicKey;
+    let FEE_YES: PublicKey;
+    let FEE_NO: PublicKey;
+    let FEE_VAULT: PublicKey;
+    let u1FeeAtas: { usdc: PublicKey; yes: PublicKey; no: PublicKey };
+    let u2FeeAtas: { usdc: PublicKey; yes: PublicKey; no: PublicKey };
+
+    /** Closed-form re-implementation of the on-chain fee formula. */
+    function expectedFee(notional: bigint, price: number): bigint {
+      if (price <= 0 || price >= 100) return 0n;
+      const bps = (150n * 4n * BigInt(price) * BigInt(100 - price)) / 10_000n;
+      return (notional * bps) / 10_000n;
+    }
+
+    /** Helper to place an order with the new account layout. */
+    async function place(
+      market: PublicKey,
+      user: Keypair,
+      atas: { usdc: PublicKey; yes: PublicKey; no: PublicKey },
+      cpUsdc: PublicKey,
+      cpYes: PublicKey,
+      side: "bid" | "ask",
+      price: number,
+      size: bigint,
+    ) {
+      const sideArg = side === "bid" ? { bid: {} } : { ask: {} };
+      const accounts: Record<string, PublicKey> = {
+        config: CONFIG_PDA,
+        market,
+        orderbook: orderbookPDA(market),
+        yesMint: yesMintPDA(market),
+        noMint: noMintPDA(market),
+        usdcMint,
+        userUsdc: atas.usdc,
+        userYes: atas.yes,
+        userNo: atas.no,
+        counterpartyUsdc: cpUsdc,
+        counterpartyYes: cpYes,
+        usdcEscrow: usdcEscrowPDA(market),
+        yesEscrow: yesEscrowPDA(market),
+        feeDestinationUsdc: feeDestUsdc,
+        user: user.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+      };
+      return (program.methods as any)
+        .placeOrder(sideArg, price, new BN(size.toString()))
+        .accounts(accounts)
+        .signers([user])
+        .rpc();
+    }
+
+    before(async () => {
+      const STRIKE_FEE = 21000n; // distinct from MARKET / MARKET2
+      const EXP = BigInt(Math.floor(Date.now() / 1000) + 7200);
+      FEE_MARKET = marketPDA(TICKER, STRIKE_FEE, EXP);
+      FEE_YES = yesMintPDA(FEE_MARKET);
+      FEE_NO = noMintPDA(FEE_MARKET);
+      FEE_VAULT = await getAssociatedTokenAddress(usdcMint, FEE_MARKET, true);
+
+      await program.methods
+        .createStrikeMarket(TICKER, new BN(STRIKE_FEE.toString()), new BN(EXP.toString()))
+        .accounts({
+          config: CONFIG_PDA,
+          market: FEE_MARKET,
+          yesMint: FEE_YES,
+          noMint: FEE_NO,
+          usdcMint,
+          vault: FEE_VAULT,
+          oracle,
+          payer: payer.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      await program.methods
+        .initMarketBooks()
+        .accounts({
+          market: FEE_MARKET,
+          yesMint: FEE_YES,
+          usdcMint,
+          orderbook: orderbookPDA(FEE_MARKET),
+          usdcEscrow: usdcEscrowPDA(FEE_MARKET),
+          yesEscrow: yesEscrowPDA(FEE_MARKET),
+          payer: payer.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      // Fresh per-market ATAs for the YES/NO mints (USDC ATA already exists).
+      const u1y = await getOrCreateAssociatedTokenAccount(connection, payer, FEE_YES, user1.publicKey);
+      const u1n = await getOrCreateAssociatedTokenAccount(connection, payer, FEE_NO,  user1.publicKey);
+      const u2y = await getOrCreateAssociatedTokenAccount(connection, payer, FEE_YES, user2.publicKey);
+      const u2n = await getOrCreateAssociatedTokenAccount(connection, payer, FEE_NO,  user2.publicKey);
+      u1FeeAtas = { usdc: user1Atas.usdc, yes: u1y.address, no: u1n.address };
+      u2FeeAtas = { usdc: user2Atas.usdc, yes: u2y.address, no: u2n.address };
+
+      // Only the MAKER (user1) mints YES inventory to post asks. The taker
+      // (user2) must NOT hold NO — otherwise the book-path position guard would
+      // (correctly) reject its YES-buying bids. user2 instead accumulates YES
+      // from the 50¢/99¢ bid fills before it needs to sell in the 1¢ test.
+      for (const [u, atas] of [[user1, u1FeeAtas]] as const) {
+        await program.methods
+          .mintPair(new BN(100))
+          .accounts({
+            config: CONFIG_PDA,
+            market: FEE_MARKET,
+            yesMint: FEE_YES,
+            noMint: FEE_NO,
+            usdcMint,
+            vault: FEE_VAULT,
+            userUsdc: atas.usdc,
+            userYes: atas.yes,
+            userNo: atas.no,
+            user: u.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([u])
+          .rpc();
+      }
+    });
+
+    it("at price=50 (peak): fee ≈ 150 bps of notional accrues to fee_destination", async () => {
+      // user1 rests an ASK @ 50¢ for 10 YES (locks YES).
+      await place(FEE_MARKET, user1, u1FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "ask", 50, 10n);
+      // user2 takes by BID @ 50¢ for 10 YES.
+      const feeBalBefore = (await getAccount(connection, feeDestUsdc)).amount;
+      await place(FEE_MARKET, user2, u2FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "bid", 50, 10n);
+      const feeBalAfter = (await getAccount(connection, feeDestUsdc)).amount;
+
+      const notional = 10n * 50n * 10_000n; // 5_000_000 micro-USDC = 5 USDC
+      const expected = expectedFee(notional, 50);
+      expect(expected).to.equal(75_000n); // 5 USDC * 1.5% = 0.075 USDC
+      expect((feeBalAfter - feeBalBefore).toString()).to.equal(expected.toString());
+    });
+
+    it("near-edge price=99: fee is tiny (≈ 5 bps), maker gets full notional", async () => {
+      // user1 rests an ASK @ 99¢ for 10 YES.
+      await place(FEE_MARKET, user1, u1FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "ask", 99, 10n);
+      const feeBalBefore = (await getAccount(connection, feeDestUsdc)).amount;
+      const u1UsdcBefore = (await getAccount(connection, u1FeeAtas.usdc)).amount;
+      await place(FEE_MARKET, user2, u2FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "bid", 99, 10n);
+      const feeBalAfter = (await getAccount(connection, feeDestUsdc)).amount;
+      const u1UsdcAfter = (await getAccount(connection, u1FeeAtas.usdc)).amount;
+
+      const notional = 10n * 99n * 10_000n; // 9_900_000
+      const expected = expectedFee(notional, 99);
+      // 150 * 4 * 99 * 1 / 10_000 = 5 (truncated); 9_900_000 * 5 / 10_000 = 4_950
+      expect(expected).to.equal(4_950n);
+      expect((feeBalAfter - feeBalBefore).toString()).to.equal(expected.toString());
+      // Maker (user1) receives full notional — fee comes off the taker.
+      expect((u1UsdcAfter - u1UsdcBefore).toString()).to.equal(notional.toString());
+    });
+
+    it("near-edge price=1 ASK side: fee is tiny, taker nets notional - fee", async () => {
+      // user1 rests a BID @ 1¢ for 10 YES (locks 10 * 1 * 10_000 = 100_000 µUSDC).
+      await place(FEE_MARKET, user1, u1FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "bid", 1, 10n);
+      const feeBalBefore = (await getAccount(connection, feeDestUsdc)).amount;
+      const u2UsdcBefore = (await getAccount(connection, u2FeeAtas.usdc)).amount;
+      // user2 takes by ASK @ 1¢ for 10 YES — sells YES into the resting bid.
+      await place(FEE_MARKET, user2, u2FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "ask", 1, 10n);
+      const feeBalAfter = (await getAccount(connection, feeDestUsdc)).amount;
+      const u2UsdcAfter = (await getAccount(connection, u2FeeAtas.usdc)).amount;
+
+      const notional = 10n * 1n * 10_000n; // 100_000
+      const expected = expectedFee(notional, 1);
+      // 150*4*1*99/10_000 = 5; 100_000 * 5 / 10_000 = 50
+      expect(expected).to.equal(50n);
+      expect((feeBalAfter - feeBalBefore).toString()).to.equal(expected.toString());
+      // Taker nets notional - fee = 99_950
+      expect((u2UsdcAfter - u2UsdcBefore).toString()).to.equal((notional - expected).toString());
+    });
+
+    it("multiple fills accumulate fees in the fee_destination ATA", async () => {
+      const feeBalBefore = (await getAccount(connection, feeDestUsdc)).amount;
+
+      // 3 separate fills at p=50: each fills 4 YES.
+      for (let i = 0; i < 3; i++) {
+        await place(FEE_MARKET, user1, u1FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "ask", 50, 4n);
+        await place(FEE_MARKET, user2, u2FeeAtas, u1FeeAtas.usdc, u1FeeAtas.yes, "bid", 50, 4n);
+      }
+
+      const feeBalAfter = (await getAccount(connection, feeDestUsdc)).amount;
+      // Per fill: notional 4*50*10_000 = 2_000_000, fee 1.5% = 30_000.
+      // 3 fills => 90_000.
+      const expectedTotal = 3n * expectedFee(2_000_000n, 50);
+      expect(expectedTotal).to.equal(90_000n);
+      expect((feeBalAfter - feeBalBefore).toString()).to.equal(expectedTotal.toString());
     });
   });
 
@@ -641,6 +877,7 @@ describe("meridian", function () {
           .accounts({
             market: FAR2, // expiry +1 day
             oracle,
+            config: CONFIG_PDA,
             caller: payer.publicKey,
           })
           .rpc();
@@ -656,13 +893,16 @@ describe("meridian", function () {
       const waitMs = Math.max(0, Number(NEAR_EXPIRY) - now + 2) * 1000;
       if (waitMs > 0) await sleep(waitMs);
 
-      // Push a fresh oracle update with price == strike (cents).
+      // Push a fresh oracle update with price == strike (cents). Stamp from the
+      // validator clock (test-validator time drifts ahead of wall-clock).
+      const atSlot = await connection.getSlot();
+      const atNow = (await connection.getBlockTime(atSlot)) ?? Math.floor(Date.now() / 1000);
       await program.methods
         .updateOracle(
           TICKER,
           new BN(22000), // price == strike → at-strike → YES wins
           new BN(20),    // conf small enough
-          new BN(Math.floor(Date.now() / 1000)),
+          new BN(atNow),
           -2,
         )
         .accounts({
@@ -676,7 +916,7 @@ describe("meridian", function () {
 
       await program.methods
         .settleMarket()
-        .accounts({ market: MARKET2, oracle, caller: payer.publicKey })
+        .accounts({ market: MARKET2, oracle, config: CONFIG_PDA, caller: payer.publicKey })
         .rpc();
 
       const m: any = await (program.account as any).market.fetch(MARKET2);
@@ -688,7 +928,7 @@ describe("meridian", function () {
       try {
         await program.methods
           .settleMarket()
-          .accounts({ market: MARKET2, oracle, caller: payer.publicKey })
+          .accounts({ market: MARKET2, oracle, config: CONFIG_PDA, caller: payer.publicKey })
           .rpc();
         throw new Error("should have rejected");
       } catch (e: any) {
@@ -768,13 +1008,15 @@ describe("meridian", function () {
         })
         .rpc();
 
-      // Write a *stale* oracle (publish_time far in the past).
+      // Write a *stale* oracle (publish_time far in the past, vs validator clock).
+      const staleSlot = await connection.getSlot();
+      const staleNow = (await connection.getBlockTime(staleSlot)) ?? Math.floor(Date.now() / 1000);
       await program.methods
         .updateOracle(
           TICKER,
           new BN(30000),
           new BN(20),
-          new BN(Math.floor(Date.now() / 1000) - 1000), // 1000s old
+          new BN(staleNow - 1000), // 1000s old → stale
           -2,
         )
         .accounts({
@@ -791,7 +1033,7 @@ describe("meridian", function () {
       try {
         await program.methods
           .settleMarket()
-          .accounts({ market: M3, oracle, caller: payer.publicKey })
+          .accounts({ market: M3, oracle, config: CONFIG_PDA, caller: payer.publicKey })
           .rpc();
         throw new Error("should have rejected stale");
       } catch (e: any) {
@@ -828,13 +1070,16 @@ describe("meridian", function () {
         })
         .rpc();
 
-      // Wide confidence: conf / price = 1000/22000 > 0.5%
+      // Wide confidence: conf / price = 1000/22000 > 0.5%. Fresh publish_time
+      // (validator clock) so the confidence gate — not staleness — is what fires.
+      const wideSlot = await connection.getSlot();
+      const wideNow = (await connection.getBlockTime(wideSlot)) ?? Math.floor(Date.now() / 1000);
       await program.methods
         .updateOracle(
           TICKER,
           new BN(22000),
           new BN(1000),
-          new BN(Math.floor(Date.now() / 1000)),
+          new BN(wideNow),
           -2,
         )
         .accounts({
@@ -851,12 +1096,172 @@ describe("meridian", function () {
       try {
         await program.methods
           .settleMarket()
-          .accounts({ market: M4, oracle, caller: payer.publicKey })
+          .accounts({ market: M4, oracle, config: CONFIG_PDA, caller: payer.publicKey })
           .rpc();
         throw new Error("should have rejected wide conf");
       } catch (e: any) {
         expect(e.toString().toLowerCase()).to.match(/confidence|wide/);
       }
+    });
+
+    it("settle ABOVE strike → YES wins; YES redeems $1/token, NO redeems $0", async () => {
+      const STRIKE = 25000n; // $250.00
+      const EXP = BigInt(Math.floor(Date.now() / 1000) + 4);
+      const M = marketPDA(TICKER, STRIKE, EXP);
+      const Y = yesMintPDA(M);
+      const N = noMintPDA(M);
+      const V = await getAssociatedTokenAddress(usdcMint, M, true);
+
+      await program.methods
+        .createStrikeMarket(TICKER, new BN(STRIKE.toString()), new BN(EXP.toString()))
+        .accounts({
+          config: CONFIG_PDA, market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          oracle, payer: payer.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      const yAta = await getOrCreateAssociatedTokenAccount(connection, payer, Y, user1.publicKey);
+      const nAta = await getOrCreateAssociatedTokenAccount(connection, payer, N, user1.publicKey);
+      await program.methods
+        .mintPair(new BN(10))
+        .accounts({
+          config: CONFIG_PDA, market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          userUsdc: user1Atas.usdc, userYes: yAta.address, userNo: nAta.address,
+          user: user1.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+
+      await sleep(Math.max(0, Number(EXP) - Math.floor(Date.now() / 1000) + 2) * 1000);
+
+      // Close ABOVE strike (26000 > 25000) → YES wins. Stamp publish_time from
+      // the validator clock — test-validator time can drift ahead of wall-clock,
+      // and settle_market measures staleness against the on-chain clock.
+      const aboveSlot = await connection.getSlot();
+      const aboveNow = (await connection.getBlockTime(aboveSlot)) ?? Math.floor(Date.now() / 1000);
+      await program.methods
+        .updateOracle(TICKER, new BN(26000), new BN(20), new BN(aboveNow), -2)
+        .accounts({ config: CONFIG_PDA, oracleAuthority: oracleAuthority.publicKey, oracle, systemProgram: SystemProgram.programId })
+        .signers([oracleAuthority])
+        .rpc();
+
+      await program.methods
+        .settleMarket()
+        .accounts({ market: M, oracle, config: CONFIG_PDA, caller: payer.publicKey })
+        .rpc();
+
+      const m: any = await (program.account as any).market.fetch(M);
+      expect(m.settled).to.equal(true);
+      expect(JSON.stringify(m.outcome)).to.match(/yes/i);
+
+      // Winning YES redeems $1/token.
+      const beforeWin = (await getAccount(connection, user1Atas.usdc)).amount;
+      await program.methods
+        .redeem({ yes: {} } as any, new BN(4))
+        .accounts({
+          market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          userUsdc: user1Atas.usdc, userYes: yAta.address, userNo: nAta.address,
+          user: user1.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+      const afterWin = (await getAccount(connection, user1Atas.usdc)).amount;
+      expect((afterWin - beforeWin).toString()).to.equal("4000000");
+
+      // Losing NO redeems $0.
+      const beforeLose = (await getAccount(connection, user1Atas.usdc)).amount;
+      await program.methods
+        .redeem({ no: {} } as any, new BN(4))
+        .accounts({
+          market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          userUsdc: user1Atas.usdc, userYes: yAta.address, userNo: nAta.address,
+          user: user1.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+      const afterLose = (await getAccount(connection, user1Atas.usdc)).amount;
+      expect((afterLose - beforeLose).toString()).to.equal("0");
+    });
+
+    it("settle BELOW strike → NO wins; NO redeems $1/token, YES redeems $0", async () => {
+      const STRIKE = 26000n; // $260.00
+      const EXP = BigInt(Math.floor(Date.now() / 1000) + 4);
+      const M = marketPDA(TICKER, STRIKE, EXP);
+      const Y = yesMintPDA(M);
+      const N = noMintPDA(M);
+      const V = await getAssociatedTokenAddress(usdcMint, M, true);
+
+      await program.methods
+        .createStrikeMarket(TICKER, new BN(STRIKE.toString()), new BN(EXP.toString()))
+        .accounts({
+          config: CONFIG_PDA, market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          oracle, payer: payer.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID, systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      const yAta = await getOrCreateAssociatedTokenAccount(connection, payer, Y, user1.publicKey);
+      const nAta = await getOrCreateAssociatedTokenAccount(connection, payer, N, user1.publicKey);
+      await program.methods
+        .mintPair(new BN(10))
+        .accounts({
+          config: CONFIG_PDA, market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          userUsdc: user1Atas.usdc, userYes: yAta.address, userNo: nAta.address,
+          user: user1.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+
+      await sleep(Math.max(0, Number(EXP) - Math.floor(Date.now() / 1000) + 2) * 1000);
+
+      // Close BELOW strike (24000 < 26000) → NO wins. Stamp publish_time from
+      // the validator clock — test-validator time can drift ahead of wall-clock,
+      // and settle_market measures staleness against the on-chain clock.
+      const belowSlot = await connection.getSlot();
+      const belowNow = (await connection.getBlockTime(belowSlot)) ?? Math.floor(Date.now() / 1000);
+      await program.methods
+        .updateOracle(TICKER, new BN(24000), new BN(20), new BN(belowNow), -2)
+        .accounts({ config: CONFIG_PDA, oracleAuthority: oracleAuthority.publicKey, oracle, systemProgram: SystemProgram.programId })
+        .signers([oracleAuthority])
+        .rpc();
+
+      await program.methods
+        .settleMarket()
+        .accounts({ market: M, oracle, config: CONFIG_PDA, caller: payer.publicKey })
+        .rpc();
+
+      const m: any = await (program.account as any).market.fetch(M);
+      expect(m.settled).to.equal(true);
+      expect(JSON.stringify(m.outcome)).to.match(/no/i);
+
+      // Winning NO redeems $1/token.
+      const beforeWin = (await getAccount(connection, user1Atas.usdc)).amount;
+      await program.methods
+        .redeem({ no: {} } as any, new BN(4))
+        .accounts({
+          market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          userUsdc: user1Atas.usdc, userYes: yAta.address, userNo: nAta.address,
+          user: user1.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+      const afterWin = (await getAccount(connection, user1Atas.usdc)).amount;
+      expect((afterWin - beforeWin).toString()).to.equal("4000000");
+
+      // Losing YES redeems $0.
+      const beforeLose = (await getAccount(connection, user1Atas.usdc)).amount;
+      await program.methods
+        .redeem({ yes: {} } as any, new BN(4))
+        .accounts({
+          market: M, yesMint: Y, noMint: N, usdcMint, vault: V,
+          userUsdc: user1Atas.usdc, userYes: yAta.address, userNo: nAta.address,
+          user: user1.publicKey, tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+      const afterLose = (await getAccount(connection, user1Atas.usdc)).amount;
+      expect((afterLose - beforeLose).toString()).to.equal("0");
     });
   });
 
@@ -1022,6 +1427,340 @@ describe("meridian", function () {
         throw new Error("should have rejected");
       } catch (e: any) {
         expect(e.toString().toLowerCase()).to.match(/admin|address|constraint/);
+      }
+    });
+  });
+
+  describe("14. set_risk_params (configurable oracle thresholds)", () => {
+    it("admin can configure staleness + confidence thresholds", async () => {
+      await program.methods
+        .setRiskParams(new BN(120), 25) // 120s staleness, 0.25% confidence
+        .accounts({ config: CONFIG_PDA, admin: admin.publicKey })
+        .signers([admin])
+        .rpc();
+      const cfg: any = await (program.account as any).config.fetch(CONFIG_PDA);
+      expect(Number(cfg.maxStalenessSecs)).to.equal(120);
+      expect(Number(cfg.maxConfidenceBps)).to.equal(25);
+
+      // Restore defaults so the threshold is back to 300s / 0.5% (50 bps).
+      await program.methods
+        .setRiskParams(new BN(300), 50)
+        .accounts({ config: CONFIG_PDA, admin: admin.publicKey })
+        .signers([admin])
+        .rpc();
+      const back: any = await (program.account as any).config.fetch(CONFIG_PDA);
+      expect(Number(back.maxStalenessSecs)).to.equal(300);
+      expect(Number(back.maxConfidenceBps)).to.equal(50);
+    });
+
+    it("rejects invalid risk params (zero confidence bps)", async () => {
+      try {
+        await program.methods
+          .setRiskParams(new BN(300), 0)
+          .accounts({ config: CONFIG_PDA, admin: admin.publicKey })
+          .signers([admin])
+          .rpc();
+        throw new Error("should have rejected");
+      } catch (e: any) {
+        expect(e.toString().toLowerCase()).to.match(/risk|param|invalid/);
+      }
+    });
+
+    it("non-admin set_risk_params is rejected", async () => {
+      try {
+        await program.methods
+          .setRiskParams(new BN(300), 50)
+          .accounts({ config: CONFIG_PDA, admin: user1.publicKey })
+          .signers([user1])
+          .rpc();
+        throw new Error("should have rejected");
+      } catch (e: any) {
+        expect(e.toString().toLowerCase()).to.match(/admin|address|constraint/);
+      }
+    });
+  });
+
+  // ----------------------------------------------------------------------
+  // 15. Book-path position guard (assert_single_sided + place_order)
+  // ----------------------------------------------------------------------
+  //
+  // A Bid that ACQUIRES YES while the buyer holds NO is only legal if the same
+  // transaction unwinds back to single-sided (the Sell-NO flow: buy YES + redeem
+  // the pair). Enforced by requiring a trailing `assert_single_sided`, which —
+  // running last — reverts the tx if both sides are still held. Resting bids
+  // (matched_size == 0) are exempt, so the MM can quote while holding NO.
+  describe("15. book-path position guard", () => {
+    const GUARD_STRIKE = 23000n;
+    let GUARD_MARKET: PublicKey;
+    let GUARD_YES: PublicKey;
+    let GUARD_NO: PublicKey;
+    let GUARD_VAULT: PublicKey;
+    let takerAtas: { usdc: PublicKey; yes: PublicKey; no: PublicKey };
+    let makerAtas: { usdc: PublicKey; yes: PublicKey; no: PublicKey };
+
+    /** place_order on GUARD_MARKET (no trailing assert — like a normal taker). */
+    function placeG(
+      user: Keypair,
+      atas: { usdc: PublicKey; yes: PublicKey; no: PublicKey },
+      cpUsdc: PublicKey,
+      cpYes: PublicKey,
+      side: "bid" | "ask",
+      price: number,
+      size: bigint,
+    ) {
+      return (program.methods as any)
+        .placeOrder(side === "bid" ? { bid: {} } : { ask: {} }, price, new BN(size.toString()))
+        .accounts({
+          config: CONFIG_PDA,
+          market: GUARD_MARKET,
+          orderbook: orderbookPDA(GUARD_MARKET),
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          usdcMint,
+          userUsdc: atas.usdc,
+          userYes: atas.yes,
+          userNo: atas.no,
+          counterpartyUsdc: cpUsdc,
+          counterpartyYes: cpYes,
+          usdcEscrow: usdcEscrowPDA(GUARD_MARKET),
+          yesEscrow: yesEscrowPDA(GUARD_MARKET),
+          feeDestinationUsdc: feeDestUsdc,
+          user: user.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        .signers([user])
+        .rpc();
+    }
+
+    function placeOrderIx(
+      atas: { usdc: PublicKey; yes: PublicKey; no: PublicKey },
+      cpUsdc: PublicKey,
+      cpYes: PublicKey,
+      side: "bid" | "ask",
+      price: number,
+      size: bigint,
+      user: PublicKey,
+    ) {
+      return (program.methods as any)
+        .placeOrder(side === "bid" ? { bid: {} } : { ask: {} }, price, new BN(size.toString()))
+        .accounts({
+          config: CONFIG_PDA,
+          market: GUARD_MARKET,
+          orderbook: orderbookPDA(GUARD_MARKET),
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          usdcMint,
+          userUsdc: atas.usdc,
+          userYes: atas.yes,
+          userNo: atas.no,
+          counterpartyUsdc: cpUsdc,
+          counterpartyYes: cpYes,
+          usdcEscrow: usdcEscrowPDA(GUARD_MARKET),
+          yesEscrow: yesEscrowPDA(GUARD_MARKET),
+          feeDestinationUsdc: feeDestUsdc,
+          user,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          instructions: SYSVAR_INSTRUCTIONS_PUBKEY,
+        })
+        .instruction();
+    }
+
+    function redeemPairIx(qty: bigint, user: PublicKey) {
+      return (program.methods as any)
+        .redeemPair(new BN(qty.toString()))
+        .accounts({
+          config: CONFIG_PDA,
+          market: GUARD_MARKET,
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          usdcMint,
+          vault: GUARD_VAULT,
+          userUsdc: takerAtas.usdc,
+          userYes: takerAtas.yes,
+          userNo: takerAtas.no,
+          user,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .instruction();
+    }
+
+    function assertSingleSidedIx(user: PublicKey) {
+      return (program.methods as any)
+        .assertSingleSided()
+        .accounts({
+          market: GUARD_MARKET,
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          userYes: takerAtas.yes,
+          userNo: takerAtas.no,
+          user,
+        })
+        .instruction();
+    }
+
+    before(async () => {
+      const EXP = BigInt(Math.floor(Date.now() / 1000) + 7200);
+      GUARD_MARKET = marketPDA(TICKER, GUARD_STRIKE, EXP);
+      GUARD_YES = yesMintPDA(GUARD_MARKET);
+      GUARD_NO = noMintPDA(GUARD_MARKET);
+      GUARD_VAULT = await getAssociatedTokenAddress(usdcMint, GUARD_MARKET, true);
+
+      await program.methods
+        .createStrikeMarket(TICKER, new BN(GUARD_STRIKE.toString()), new BN(EXP.toString()))
+        .accounts({
+          config: CONFIG_PDA,
+          market: GUARD_MARKET,
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          usdcMint,
+          vault: GUARD_VAULT,
+          oracle,
+          payer: payer.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      await program.methods
+        .initMarketBooks()
+        .accounts({
+          market: GUARD_MARKET,
+          yesMint: GUARD_YES,
+          usdcMint,
+          orderbook: orderbookPDA(GUARD_MARKET),
+          usdcEscrow: usdcEscrowPDA(GUARD_MARKET),
+          yesEscrow: yesEscrowPDA(GUARD_MARKET),
+          payer: payer.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      const ty = await getOrCreateAssociatedTokenAccount(connection, payer, GUARD_YES, user1.publicKey);
+      const tn = await getOrCreateAssociatedTokenAccount(connection, payer, GUARD_NO, user1.publicKey);
+      const my = await getOrCreateAssociatedTokenAccount(connection, payer, GUARD_YES, user2.publicKey);
+      const mn = await getOrCreateAssociatedTokenAccount(connection, payer, GUARD_NO, user2.publicKey);
+      takerAtas = { usdc: user1Atas.usdc, yes: ty.address, no: tn.address };
+      makerAtas = { usdc: user2Atas.usdc, yes: my.address, no: mn.address };
+
+      // Give the taker a NO-ONLY position: mint a pair, then sell the YES leg
+      // into a maker bid. Taker ends holding 20 NO, 0 YES.
+      await program.methods
+        .mintPair(new BN(20))
+        .accounts({
+          config: CONFIG_PDA,
+          market: GUARD_MARKET,
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          usdcMint,
+          vault: GUARD_VAULT,
+          userUsdc: takerAtas.usdc,
+          userYes: takerAtas.yes,
+          userNo: takerAtas.no,
+          user: user1.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+
+      // Maker rests a bid buying 20 YES @ 40, taker sells 20 YES into it.
+      await placeG(user2, makerAtas, makerAtas.usdc, makerAtas.yes, "bid", 40, 20n);
+      await placeG(user1, takerAtas, takerAtas.usdc, makerAtas.yes, "ask", 40, 20n);
+
+      // Maker (now holding 20 YES) rests an ASK selling 20 YES @ 45.
+      await placeG(user2, makerAtas, makerAtas.usdc, makerAtas.yes, "ask", 45, 20n);
+
+      const tYes = (await getAccount(connection, takerAtas.yes)).amount;
+      const tNo = (await getAccount(connection, takerAtas.no)).amount;
+      expect(tYes.toString()).to.equal("0");
+      expect(tNo.toString()).to.equal("20");
+    });
+
+    it("Bid acquiring YES while holding NO WITHOUT a trailing assert is rejected", async () => {
+      try {
+        await placeG(user1, takerAtas, makerAtas.usdc, takerAtas.yes, "bid", 45, 5n);
+        throw new Error("should have rejected");
+      } catch (e: any) {
+        expect(e.toString().toLowerCase()).to.match(/single|guard|assert/);
+      }
+      // Maker's ask is untouched (the failed tx reverted atomically).
+      const tNo = (await getAccount(connection, takerAtas.no)).amount;
+      expect(tNo.toString()).to.equal("20");
+    });
+
+    it("Sell-NO atomic tx [buy YES + redeem_pair + assert] succeeds and ends single-sided", async () => {
+      const buyIx = await placeOrderIx(
+        takerAtas,
+        makerAtas.usdc,
+        takerAtas.yes,
+        "bid",
+        45,
+        5n,
+        user1.publicKey,
+      );
+      const redeemIx = await redeemPairIx(5n, user1.publicKey);
+      const assertIx = await assertSingleSidedIx(user1.publicKey);
+      const tx = new Transaction().add(buyIx, redeemIx, assertIx);
+      await provider.sendAndConfirm(tx, [user1]);
+
+      const tYes = (await getAccount(connection, takerAtas.yes)).amount;
+      const tNo = (await getAccount(connection, takerAtas.no)).amount;
+      expect(tYes.toString()).to.equal("0"); // bought 5, burned 5
+      expect(tNo.toString()).to.equal("15"); // redeemed 5 of 20
+    });
+
+    it("assert_single_sided passes when single-sided, fails when holding both", async () => {
+      // Taker currently holds 15 NO, 0 YES → single-sided → passes.
+      await program.methods
+        .assertSingleSided()
+        .accounts({
+          market: GUARD_MARKET,
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          userYes: takerAtas.yes,
+          userNo: takerAtas.no,
+          user: user1.publicKey,
+        })
+        .signers([user1])
+        .rpc();
+
+      // Mint 1 pair → now holds 1 YES + 16 NO → assert must fail.
+      await program.methods
+        .mintPair(new BN(1))
+        .accounts({
+          config: CONFIG_PDA,
+          market: GUARD_MARKET,
+          yesMint: GUARD_YES,
+          noMint: GUARD_NO,
+          usdcMint,
+          vault: GUARD_VAULT,
+          userUsdc: takerAtas.usdc,
+          userYes: takerAtas.yes,
+          userNo: takerAtas.no,
+          user: user1.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+
+      try {
+        await program.methods
+          .assertSingleSided()
+          .accounts({
+            market: GUARD_MARKET,
+            yesMint: GUARD_YES,
+            noMint: GUARD_NO,
+            userYes: takerAtas.yes,
+            userNo: takerAtas.no,
+            user: user1.publicKey,
+          })
+          .signers([user1])
+          .rpc();
+        throw new Error("should have rejected");
+      } catch (e: any) {
+        expect(e.toString().toLowerCase()).to.match(/both|single|sided/);
       }
     });
   });

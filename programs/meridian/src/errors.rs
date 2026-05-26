@@ -83,4 +83,16 @@ pub enum MeridianError {
 
     #[msg("Order book is full")]
     OrderBookFull,
+
+    #[msg("Fee destination USDC ATA does not match config.fee_destination")]
+    InvalidFeeDestination,
+
+    #[msg("Invalid risk parameter (staleness must be > 0; confidence bps in 1..=10000)")]
+    InvalidRiskParam,
+
+    #[msg("Cannot hold both YES and NO on the same strike at once")]
+    BothSidesHeld,
+
+    #[msg("Buying YES while holding NO requires a trailing assert_single_sided in the same transaction")]
+    SingleSidedGuardMissing,
 }

@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::MeridianError;
-use crate::state::{Config, MockOracle, MAX_TICKER_LEN};
+use crate::state::{Config, OracleAccount, MAX_TICKER_LEN};
 
-/// Update (or init-on-first-use) the mock oracle PDA for a ticker.
+/// Update (or init-on-first-use) the oracle PDA for a ticker.
 ///
 /// PDA seeds: `["oracle", ticker_bytes]`.
 ///
@@ -21,11 +21,11 @@ pub struct UpdateOracle<'info> {
     #[account(
         init_if_needed,
         payer = oracle_authority,
-        space = 8 + MockOracle::INIT_SPACE,
-        seeds = [MockOracle::SEED_PREFIX, ticker.as_bytes()],
+        space = 8 + OracleAccount::INIT_SPACE,
+        seeds = [OracleAccount::SEED_PREFIX, ticker.as_bytes()],
         bump,
     )]
-    pub oracle: Box<Account<'info, MockOracle>>,
+    pub oracle: Box<Account<'info, OracleAccount>>,
 
     pub system_program: Program<'info, System>,
 }

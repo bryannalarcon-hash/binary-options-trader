@@ -58,7 +58,7 @@ export interface MorningResult {
  * Morning job (~8:00 AM ET).
  *
  * For each MAG7 ticker:
- *   1. Read previous close (Hermes for now — TODO: read mock-oracle PDA on localnet).
+ *   1. Read previous close (Hermes for now — TODO: read oracle PDA on-chain).
  *   2. Compute strike grid (±3/6/9%, $10 rounded, dedup).
  *   3. For each strike, bundle `create_strike_market` + `init_market_books`
  *      into a single transaction (the smart contract requires them paired
@@ -99,9 +99,9 @@ export async function runMorningJob(): Promise<MorningResult[]> {
     return [];
   }
 
-  // Fetch previous closes off-chain for now. On localnet, prices come from the
-  // mock oracle account; we could also read those — but Hermes is the source of
-  // truth for "what was the close 16 hours ago" before settlement runs.
+  // Fetch previous closes off-chain for now. The on-chain oracle account holds
+  // the latest pushed price; we could also read that — but Hermes is the source
+  // of truth for "what was the close 16 hours ago" before settlement runs.
   const priceMap = await fetchMag7Prices(env.pythFeeds).catch((err) => {
     log.warn({ err: errMsg(err) }, "hermes fetch failed");
     return new Map();

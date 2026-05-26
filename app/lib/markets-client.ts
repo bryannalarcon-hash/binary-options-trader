@@ -1,28 +1,29 @@
 /**
- * Markets data client.
+ * Markets data client — REAL on-chain reads, no mock fallbacks.
  *
- * `useAllMarkets` first tries an on-chain `program.account.market.all()`
- * call. If the program isn't deployed at the configured ID (or the RPC is
- * unreachable, or the query throws for any other reason) we fall back to the
- * deterministic mock data so the UI keeps rendering without disruption.
+ * Every hook reads the deployed program at `env.programId`:
+ *   - `useAllMarkets`  → `program.account.market.all()` (decoded MAG7 markets).
+ *   - `useMarket`      → one market by (ticker, strike) from `useAllMarkets`.
+ *   - `useSpotPrice`   → the per-ticker `OracleAccount` PDA (seeds
+ *                        ["oracle", ticker]); spot USD = price / 100 (expo -2,
+ *                        cents). Subscribes via onAccountChange + poll backstop.
+ *   - `useOrderBook`   → the `OrderBook` PDA via `program.account.orderBook`,
+ *                        subscribed live.
+ *   - `useRecentTrades`→ live `OrderMatched` program events.
+ *   - `useStrikeList`  → derived from REAL markets for the ticker, with yes/no
+ *                        cents from the REAL order-book mid (or an oracle-vs-
+ *                        strike ESTIMATE clearly flagged via `estimated`), and
+ *                        volume only from real OrderMatched fills (else 0).
  *
- * `useOrderBook` reads the on-chain `OrderBook` PDA via
- * `program.account.orderBook.fetch()` (zero-copy bytemuck layout, but Anchor
- * 0.30 deserializes it for us based on the IDL). It also subscribes to the
- * account via `connection.onAccountChange` for live updates.
- *
- * `useRecentTrades` subscribes to the `OrderMatched` program event and keeps
- * the last 50 matches in memory.
- *
- * All hooks gracefully fall back to deterministic mock data when:
- *   - the program isn't configured / deployed,
- *   - the read throws,
- *   - or (for OrderBook) the book PDA doesn't exist yet (newer market).
+ * Honest states (NO synthesized numbers anywhere):
+ *   - SSR / initial:     empty ([]/null) + loading = true.
+ *   - Empty on-chain:    empty + loading = false (callers render "No active …").
+ *   - RPC / read error:  empty + error flag (callers render an error notice).
  */
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnchorProvider, Program, type Idl, BN, EventParser, BorshCoder } from "@coral-xyz/anchor";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
@@ -33,23 +34,41 @@ import {
   type Logs,
 } from "@solana/web3.js";
 
-import type { Market, Order, OrderBookSnapshot, Outcome, Ticker as TypesTicker } from "@meridian/types";
+import type { Market, Order, OrderBookSnapshot, Outcome, Side, Ticker as TypesTicker } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
-import {
-  allMockMarkets,
-  mockMarket,
-  mockRecentTrades,
-  orderBookFor,
-  strikesForTicker,
-  yesPriceCents,
-  type RecentTrade,
-} from "./mock-data";
 import { MAG7_TICKERS, type Ticker } from "./tickers";
 
 const MAG7_SET = new Set<string>(MAG7_TICKERS);
 const ORDERBOOK_SEED = Buffer.from("orderbook");
-const MARKET_SEED = Buffer.from("market");
+const ORACLE_SEED = Buffer.from("oracle");
+
+/** Recent-trade tape entry (live `OrderMatched` events). */
+export interface RecentTrade {
+  ts: number;
+  price: number;
+  size: number;
+  side: Side;
+  txSig: string;
+}
+
+/** One strike row derived from a real on-chain market. */
+export interface StrikeRow {
+  strike: number;
+  yesCents: number;
+  noCents: number;
+  /** Real 24h-ish volume from OrderMatched fills; 0 when none observed. */
+  volume: number;
+  /**
+   * True when yes/no cents are an oracle-vs-strike ESTIMATE (book empty),
+   * false when they come from the real order-book mid.
+   */
+  estimated: boolean;
+}
+
+// Stable empty reference so `setRows(EMPTY_STRIKE_ROWS)` is a no-op once already
+// empty (React bails out), instead of a fresh `[]` that retriggers renders.
+const EMPTY_STRIKE_ROWS: StrikeRow[] = [];
 
 function makeReadOnlyProgram(connection: ReturnType<typeof useConnection>["connection"]):
   | { program: Program; programId: PublicKey }
@@ -127,12 +146,22 @@ function decodeOnChainMarket(entry: {
 }
 
 /**
- * Hook: returns all live markets across the MAG7 chain.
+ * Hook: all live markets across the MAG7 chain (REAL on-chain only).
+ *
+ * Returns:
+ *   - markets: decoded markets ([] until first successful read, or on error)
+ *   - loading: true until the first read settles
+ *   - error:   true if the program is not configured or a read threw
  */
-export function useAllMarkets(): { markets: Market[]; loading: boolean } {
+export function useAllMarkets(): { markets: Market[]; loading: boolean; error: boolean } {
   const { connection } = useConnection();
-  const [markets, setMarkets] = useState<Market[]>(() => allMockMarkets());
-  const [loading, setLoading] = useState(false);
+  const [markets, setMarkets] = useState<Market[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  // Stable content signature: we only swap the `markets` array reference when
+  // the decoded content actually changes, so downstream effects/renders don't
+  // churn (and flicker) on every 10s poll that returns identical data.
+  const sigRef = useRef<string>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -142,7 +171,8 @@ export function useAllMarkets(): { markets: Market[]; loading: boolean } {
       const built = makeReadOnlyProgram(connection);
       if (!built) {
         if (!cancelled) {
-          setMarkets(allMockMarkets());
+          setMarkets([]);
+          setError(true);
           setLoading(false);
         }
         return;
@@ -156,15 +186,20 @@ export function useAllMarkets(): { markets: Market[]; loading: boolean } {
           .map((r) => decodeOnChainMarket(r))
           .filter((m): m is Market => m !== null);
         if (cancelled) return;
-        if (decoded.length === 0) {
-          setMarkets(allMockMarkets());
-        } else {
+        const sig = decoded
+          .map((m) => `${m.address}:${m.strike}:${m.settled ? 1 : 0}:${m.totalPairsMinted}`)
+          .sort()
+          .join("|");
+        if (sig !== sigRef.current) {
+          sigRef.current = sig;
           setMarkets(decoded);
         }
+        setError(false);
         setLoading(false);
       } catch {
         if (!cancelled) {
-          setMarkets(allMockMarkets());
+          // Keep last-good markets if we had them; flag the error.
+          setError(true);
           setLoading(false);
         }
       }
@@ -178,38 +213,143 @@ export function useAllMarkets(): { markets: Market[]; loading: boolean } {
     };
   }, [connection]);
 
-  return { markets, loading };
+  return { markets, loading, error };
 }
 
 /** Hook: markets for one ticker. */
 export function useMarketsForTicker(ticker: Ticker): {
   markets: Market[];
   loading: boolean;
+  error: boolean;
 } {
-  const { markets, loading } = useAllMarkets();
-  return {
-    markets: markets.filter((m) => m.ticker === ticker),
-    loading,
-  };
+  const { markets, loading, error } = useAllMarkets();
+  // Memoize the filtered slice — returning a fresh array every render makes it
+  // an unstable useEffect dependency for consumers (useStrikeList), which then
+  // re-run their effects every render and loop on setState (max-update-depth).
+  const filtered = useMemo(
+    () => markets.filter((m) => m.ticker === ticker),
+    [markets, ticker],
+  );
+  return { markets: filtered, loading, error };
 }
 
-/** Hook: a single market by (ticker, strike). */
-export function useMarket(ticker: Ticker, strike: number): Market | null {
-  const { markets } = useAllMarkets();
-  return (
-    markets.find((m) => m.ticker === ticker && m.strike === strike) ??
-    mockMarket(ticker, strike)
-  );
+/** Hook: a single market by (ticker, strike). null until found / if absent. */
+export function useMarket(
+  ticker: Ticker,
+  strike: number,
+): { market: Market | null; loading: boolean; error: boolean } {
+  const { markets, loading, error } = useAllMarkets();
+  const market = markets.find((m) => m.ticker === ticker && m.strike === strike) ?? null;
+  return { market, loading, error };
 }
 
 // ---------------------------------------------------------------------------
-// Order-book + recent-trades — REAL on-chain reads with mock fallback.
+// Spot price — REAL OracleAccount PDA read (seeds ["oracle", ticker]).
+// ---------------------------------------------------------------------------
+
+/** Derive the OracleAccount PDA for a ticker. */
+function oraclePda(programId: PublicKey, ticker: Ticker): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [ORACLE_SEED, Buffer.from(ticker, "utf8")],
+    programId,
+  )[0];
+}
+
+/**
+ * Hook: live spot price for a ticker, read from the on-chain OracleAccount.
+ *
+ *   - spotUsd:      price / 100 (oracle stores cents, expo = -2), null until read.
+ *   - publishTime:  oracle publish_time (unix seconds), null until read.
+ *   - loading:      true until the first read settles.
+ *   - error:        true if program absent, PDA missing, or a read threw.
+ *
+ * Subscribes via onAccountChange for live updates with a slow poll backstop.
+ */
+export function useSpotPrice(ticker: Ticker): {
+  spotUsd: number | null;
+  publishTime: number | null;
+  loading: boolean;
+  error: boolean;
+} {
+  const { connection } = useConnection();
+  const [spotUsd, setSpotUsd] = useState<number | null>(null);
+  const [publishTime, setPublishTime] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let subId: number | null = null;
+    let pda: PublicKey | null = null;
+    let program: Program | null = null;
+
+    setLoading(true);
+    setError(false);
+
+    const built = makeReadOnlyProgram(connection);
+    if (!built) {
+      setSpotUsd(null);
+      setPublishTime(null);
+      setError(true);
+      setLoading(false);
+      return;
+    }
+    program = built.program;
+    pda = oraclePda(built.programId, ticker);
+
+    async function refresh() {
+      if (cancelled || !program || !pda) return;
+      try {
+        const acct = (await (program.account as any).oracleAccount.fetch(pda)) as {
+          price: BN;
+          publishTime: BN;
+        };
+        if (cancelled) return;
+        const cents = bnToNumber(acct.price);
+        setSpotUsd(cents / 100);
+        setPublishTime(bnToNumber(acct.publishTime));
+        setError(false);
+        setLoading(false);
+      } catch {
+        if (!cancelled) {
+          // Missing PDA or RPC error — honest empty state, never a fake number.
+          setError(true);
+          setLoading(false);
+        }
+      }
+    }
+
+    void refresh();
+    try {
+      subId = connection.onAccountChange(pda, () => void refresh(), "confirmed");
+    } catch {
+      /* WS unavailable — poll backstop below still runs */
+    }
+    const id = window.setInterval(() => void refresh(), 10_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      if (subId != null) {
+        try {
+          void connection.removeAccountChangeListener(subId);
+        } catch {
+          /* noop */
+        }
+      }
+    };
+  }, [connection, ticker]);
+
+  return { spotUsd, publishTime, loading, error };
+}
+
+// ---------------------------------------------------------------------------
+// Order-book + recent-trades — REAL on-chain reads (no fallback).
 // ---------------------------------------------------------------------------
 
 /**
  * Locate the on-chain Market PDA + its derived OrderBook PDA for a
- * (ticker, strike). We don't know expiry_ts ahead of time so we scan
- * `program.account.market.all()` for a match. Returns null if not found.
+ * (ticker, strike). We scan `program.account.market.all()` for a match.
  */
 async function findOrderBookPda(
   program: Program,
@@ -279,21 +419,24 @@ function decodeOrderBook(
 }
 
 /**
- * Hook: live order book for a (ticker, strike).
+ * Hook: live order book for a (ticker, strike) — REAL on-chain only.
  *
- * - SSR hydrate: deterministic mock so cards don't flash empty.
- * - On mount: locate Market PDA → OrderBook PDA, fetch + subscribe.
- * - Falls back to mock book if program missing or fetch fails.
+ *   - book:    snapshot, or null until first read / on missing-PDA / error.
+ *   - loading: true until the first read settles.
+ *   - error:   true if program absent, market/book PDA missing, or read threw.
+ *
+ * NOTE: an EXISTING but EMPTY book returns a non-null snapshot with empty
+ * bids/asks (loading=false, error=false) so callers can show "Order book is
+ * empty". A missing PDA or RPC failure sets error=true.
  */
 export function useOrderBook(
   ticker: Ticker,
   strike: number,
-): { book: OrderBookSnapshot | null; loading: boolean } {
+): { book: OrderBookSnapshot | null; loading: boolean; error: boolean } {
   const { connection } = useConnection();
-  const [book, setBook] = useState<OrderBookSnapshot | null>(() =>
-    orderBookFor(ticker, strike),
-  );
-  const [loading, setLoading] = useState(false);
+  const [book, setBook] = useState<OrderBookSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -302,11 +445,15 @@ export function useOrderBook(
     let marketPk: PublicKey | null = null;
     let program: Program | null = null;
 
+    setLoading(true);
+    setError(false);
+
     async function setup() {
       const built = makeReadOnlyProgram(connection);
       if (!built) {
         if (!cancelled) {
-          setBook(orderBookFor(ticker, strike));
+          setBook(null);
+          setError(true);
           setLoading(false);
         }
         return;
@@ -318,11 +465,11 @@ export function useOrderBook(
         ticker,
         strike,
       );
-      if (!located || cancelled) {
-        if (!cancelled) {
-          setBook(orderBookFor(ticker, strike));
-          setLoading(false);
-        }
+      if (cancelled) return;
+      if (!located) {
+        setBook(null);
+        setError(true);
+        setLoading(false);
         return;
       }
       marketPk = located.market;
@@ -334,12 +481,14 @@ export function useOrderBook(
           const raw = await (program.account as any).orderBook.fetch(orderbookPk);
           if (cancelled) return;
           setBook(decodeOrderBook(marketPk, raw));
+          setError(false);
           setLoading(false);
         } catch {
           if (!cancelled) {
-            // Account doesn't exist yet (init_market_books not called) — show
-            // the deterministic mock book instead of an empty one.
-            setBook(orderBookFor(ticker, strike));
+            // Book PDA doesn't exist yet (init_market_books not called) — honest
+            // empty book so the caller renders "Order book is empty", not mock.
+            setBook(marketPk ? { market: marketPk.toBase58(), bids: [], asks: [] } : null);
+            setError(false);
             setLoading(false);
           }
         }
@@ -384,23 +533,24 @@ export function useOrderBook(
     };
   }, [connection, ticker, strike]);
 
-  return { book, loading };
+  return { book, loading, error };
 }
 
 /**
- * Hook: recent trades tape for a (ticker, strike).
+ * Hook: recent trades tape for a (ticker, strike) — REAL on-chain only.
  *
- * Subscribes to program logs and parses `OrderMatched` events. Filters to
- * the matched market PDA. Keeps the last 50 matches in memory.
- *
- * Falls back to deterministic mock trades when program isn't deployed or
- * we can't find the market PDA.
+ * Subscribes to program logs and parses `OrderMatched` events filtered to the
+ * matched market PDA. Keeps the last 50 matches in memory. Starts empty; never
+ * synthesizes trades. `error` is set if the program/market can't be resolved.
  */
-export function useRecentTrades(ticker: Ticker, strike: number): RecentTrade[] {
+export function useRecentTrades(
+  ticker: Ticker,
+  strike: number,
+): { trades: RecentTrade[]; loading: boolean; error: boolean } {
   const { connection } = useConnection();
-  const [trades, setTrades] = useState<RecentTrade[]>(() =>
-    mockRecentTrades(ticker, strike),
-  );
+  const [trades, setTrades] = useState<RecentTrade[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const tradesRef = useRef<RecentTrade[]>([]);
 
   useEffect(() => {
@@ -409,10 +559,18 @@ export function useRecentTrades(ticker: Ticker, strike: number): RecentTrade[] {
     let marketPk: PublicKey | null = null;
     let parser: EventParser | null = null;
 
+    setLoading(true);
+    setError(false);
+    tradesRef.current = [];
+    setTrades([]);
+
     async function setup() {
       const built = makeReadOnlyProgram(connection);
       if (!built) {
-        if (!cancelled) setTrades(mockRecentTrades(ticker, strike));
+        if (!cancelled) {
+          setError(true);
+          setLoading(false);
+        }
         return;
       }
       const located = await findOrderBookPda(
@@ -421,14 +579,14 @@ export function useRecentTrades(ticker: Ticker, strike: number): RecentTrade[] {
         ticker,
         strike,
       );
-      if (!located || cancelled) {
-        if (!cancelled) setTrades(mockRecentTrades(ticker, strike));
+      if (cancelled) return;
+      if (!located) {
+        setError(true);
+        setLoading(false);
         return;
       }
       marketPk = located.market;
-      // Reset to empty list — we'll accumulate live matches.
-      tradesRef.current = [];
-      setTrades([]);
+      setLoading(false);
 
       parser = new EventParser(
         built.programId,
@@ -469,8 +627,8 @@ export function useRecentTrades(ticker: Ticker, strike: number): RecentTrade[] {
           "confirmed",
         );
       } catch {
-        // WS unavailable — keep mock data on screen.
-        if (!cancelled) setTrades(mockRecentTrades(ticker, strike));
+        // WS unavailable — tape stays empty (honest), flag error.
+        if (!cancelled) setError(true);
       }
     }
 
@@ -488,42 +646,204 @@ export function useRecentTrades(ticker: Ticker, strike: number): RecentTrade[] {
     };
   }, [connection, ticker, strike]);
 
-  return trades;
+  return { trades, loading, error };
+}
+
+// ---------------------------------------------------------------------------
+// Strike list — derived from REAL markets + REAL order books.
+// ---------------------------------------------------------------------------
+
+/**
+ * Read one market's order book and derive a yes/no mid in cents.
+ *
+ * Returns:
+ *   - { yesCents, estimated:false } when the book has a usable bid+ask mid
+ *     (or a one-sided best price);
+ *   - null when the book is empty / missing (caller falls back to an estimate).
+ *
+ * Also returns the summed resting size as a rough liquidity figure (NOT used as
+ * "volume" — volume comes only from OrderMatched fills).
+ */
+async function readBookMid(
+  program: Program,
+  programId: PublicKey,
+  marketPk: PublicKey,
+): Promise<{ yesCents: number } | null> {
+  const ob = PublicKey.findProgramAddressSync(
+    [ORDERBOOK_SEED, marketPk.toBuffer()],
+    programId,
+  )[0];
+  try {
+    const raw = (await (program.account as any).orderBook.fetch(ob)) as {
+      bids: Array<{ owner: PublicKey; price: number; size: BN }>;
+      asks: Array<{ owner: PublicKey; price: number; size: BN }>;
+    };
+    let bestBid = -1;
+    let bestAsk = -1;
+    for (const b of raw.bids ?? []) {
+      if (!b || b.owner.equals(PublicKey.default) || b.size.isZero()) continue;
+      if (b.price > bestBid) bestBid = b.price;
+    }
+    for (const a of raw.asks ?? []) {
+      if (!a || a.owner.equals(PublicKey.default) || a.size.isZero()) continue;
+      if (bestAsk < 0 || a.price < bestAsk) bestAsk = a.price;
+    }
+    if (bestBid >= 0 && bestAsk >= 0) {
+      return { yesCents: Math.round((bestBid + bestAsk) / 2) };
+    }
+    if (bestBid >= 0) return { yesCents: bestBid };
+    if (bestAsk >= 0) return { yesCents: bestAsk };
+    return null; // book exists but empty
+  } catch {
+    return null; // book PDA missing
+  }
 }
 
 /**
- * Hook: strike list for a ticker, decorated with live yes/no prices for
- * the strike-list UI element on Trade page + per-card expander on Markets.
+ * Hook: strike list for a ticker, derived from REAL on-chain markets.
+ *
+ * For each non-settled market matching `ticker`:
+ *   - strike  = market.strike (real).
+ *   - yes/no  = REAL order-book mid when available; otherwise an ESTIMATE from
+ *               oracle spot vs strike, with `estimated:true` so the UI can mark
+ *               it. When the oracle is unavailable too, the row is omitted
+ *               (we never invent a price).
+ *   - volume  = REAL OrderMatched fill size observed live; 0 otherwise.
+ *
+ * Returns rows + loading/error so callers can render honest empty/error states.
  */
 export function useStrikeList(ticker: Ticker): {
-  strike: number;
-  yesCents: number;
-  noCents: number;
-  volume: number;
-}[] {
-  const build = (t: Ticker) =>
-    strikesForTicker(t).map((s) => {
-      const yes = yesPriceCents(t, s);
-      return {
-        strike: s,
-        yesCents: yes,
-        noCents: 100 - yes,
-        volume: 1000 + ((s + t.length * 73) % 4500),
-      };
-    });
+  rows: StrikeRow[];
+  loading: boolean;
+  error: boolean;
+} {
+  const { connection } = useConnection();
+  const { markets, loading: marketsLoading, error: marketsError } = useMarketsForTicker(ticker);
+  const { spotUsd } = useSpotPrice(ticker);
+  const [rows, setRows] = useState<StrikeRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  // Accumulated real volume per strike (cents key) from OrderMatched events.
+  const volumeRef = useRef<Map<number, number>>(new Map());
 
-  const [out, setOut] = useState<
-    { strike: number; yesCents: number; noCents: number; volume: number }[]
-  >(() => build(ticker));
+  // Subscribe to OrderMatched events to accumulate REAL volume per strike.
+  useEffect(() => {
+    let cancelled = false;
+    let subId: number | null = null;
+    const built = makeReadOnlyProgram(connection);
+    if (!built || markets.length === 0) return;
+
+    const byMarketPk = new Map<string, number>();
+    for (const m of markets) byMarketPk.set(m.address, m.strike);
+
+    const parser = new EventParser(built.programId, new BorshCoder(built.program.idl as Idl));
+    try {
+      subId = connection.onLogs(
+        built.programId,
+        (logs: Logs) => {
+          if (cancelled || !logs.logs?.length) return;
+          try {
+            for (const ev of parser.parseLogs(logs.logs)) {
+              if (ev.name !== "OrderMatched" && ev.name !== "orderMatched") continue;
+              const d = ev.data as { market: PublicKey; size: BN };
+              const strike = d?.market ? byMarketPk.get(d.market.toBase58()) : undefined;
+              if (strike == null) continue;
+              const cur = volumeRef.current.get(strike) ?? 0;
+              volumeRef.current.set(strike, cur + Number(d.size.toString()));
+            }
+          } catch {
+            /* non-fatal */
+          }
+        },
+        "confirmed",
+      );
+    } catch {
+      /* WS unavailable — volume stays 0 (honest) */
+    }
+    return () => {
+      cancelled = true;
+      if (subId != null) {
+        try {
+          void connection.removeOnLogsListener(subId);
+        } catch {
+          /* noop */
+        }
+      }
+    };
+  }, [connection, markets]);
 
   useEffect(() => {
-    function refresh() {
-      setOut(build(ticker));
-    }
-    refresh();
-    const id = window.setInterval(refresh, 2_500);
-    return () => window.clearInterval(id);
-  }, [ticker]);
+    let cancelled = false;
 
-  return out;
+    if (marketsError) {
+      setRows(EMPTY_STRIKE_ROWS);
+      setError(true);
+      setLoading(false);
+      return;
+    }
+    if (marketsLoading) {
+      setLoading(true);
+      return;
+    }
+
+    const built = makeReadOnlyProgram(connection);
+    if (!built) {
+      setRows(EMPTY_STRIKE_ROWS);
+      setError(true);
+      setLoading(false);
+      return;
+    }
+
+    const active = markets.filter((m) => !m.settled);
+    if (active.length === 0) {
+      setRows(EMPTY_STRIKE_ROWS);
+      setError(false);
+      setLoading(false);
+      return;
+    }
+
+    async function build() {
+      const out: StrikeRow[] = [];
+      for (const m of active) {
+        const marketPk = new PublicKey(m.address);
+        const mid = await readBookMid(built!.program, built!.programId, marketPk);
+        let yesCents: number | null = null;
+        let estimated = false;
+        if (mid) {
+          yesCents = Math.max(1, Math.min(99, mid.yesCents));
+        } else if (spotUsd != null) {
+          // ESTIMATE only — clearly flagged. Rough monotonic mapping of
+          // (spot - strike) into a 1..99 yes probability proxy.
+          const strikeUsd = m.strike / 100;
+          const diffPct = ((spotUsd - strikeUsd) / strikeUsd) * 100;
+          yesCents = Math.max(1, Math.min(99, Math.round(50 + diffPct * 4)));
+          estimated = true;
+        } else {
+          // No book, no oracle — omit rather than invent a price.
+          continue;
+        }
+        out.push({
+          strike: m.strike,
+          yesCents,
+          noCents: 100 - yesCents,
+          volume: volumeRef.current.get(m.strike) ?? 0,
+          estimated,
+        });
+      }
+      out.sort((a, b) => a.strike - b.strike);
+      if (cancelled) return;
+      setRows(out);
+      setError(false);
+      setLoading(false);
+    }
+
+    void build();
+    const id = window.setInterval(() => void build(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [connection, markets, marketsLoading, marketsError, spotUsd]);
+
+  return { rows, loading, error };
 }
