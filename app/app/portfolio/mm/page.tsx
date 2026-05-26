@@ -36,8 +36,7 @@ import { env } from "@/lib/env";
 import idl from "@/lib/meridian-idl.json";
 import {
   buildAndSendMintPair,
-  buildPlaceOrderIx,
-  getFeeDestinationUsdc,
+  sweepCrossableLevels,
 } from "@/lib/composite-tx";
 import {
   buildAndSendCancelOrder,
@@ -69,7 +68,7 @@ interface OpenOrder {
  * Market Maker dashboard — caret-styled, all real on-chain flows preserved:
  *   - useAllMarkets / useUserPositions (read)
  *   - buildAndSendMintPair (mint pairs)
- *   - buildPlaceOrderIx (quote both sides)
+ *   - sweepCrossableLevels (quote both sides)
  *   - buildAndSendCancelOrder (pull a single quote or cancel-all)
  */
 export default function MarketMakerDashboard() {
@@ -788,7 +787,7 @@ function InventoryChart({ openOrders }: { openOrders: OpenOrder[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Quote Both Sides form (wired to buildPlaceOrderIx)
+// Quote Both Sides form (wired to sweepCrossableLevels)
 // ---------------------------------------------------------------------------
 function QuoteBothSidesForm({
   markets,
@@ -859,72 +858,25 @@ function QuoteBothSidesForm({
       )[0];
       const usdcMint = new PublicKey(env.usdcMint);
       const user = wallet.publicKey;
-      const { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction } =
-        await import("@solana/spl-token");
-      const noMint = PublicKey.findProgramAddressSync(
-        [Buffer.from("no_mint"), marketPk.toBuffer()],
-        programId,
-      )[0];
-      const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
-      const userYes = getAssociatedTokenAddressSync(yesMint, user);
-      const userNo = getAssociatedTokenAddressSync(noMint, user);
-      const feeDestinationUsdc = await getFeeDestinationUsdc(program, usdcMint);
 
-      const bidIx = await buildPlaceOrderIx(
-        program,
-        {
-          market: marketPk,
-          yesMint,
-          noMint,
-          usdcMint,
-          user,
-          userUsdc,
-          userYes,
-          userNo,
-          counterpartyUsdc: userUsdc,
-          counterpartyYes: userYes,
-          feeDestinationUsdc,
-        },
-        "bid",
-        bidPrice,
-        size,
+      // Route both legs through the shared sweep path. Building raw place_order
+      // ix with self-placeholder counterparties fails NotOrderOwner (0x1782) the
+      // moment a quote crosses the resting book — sweepCrossableLevels discovers
+      // the actual crossing maker and passes THAT maker's ATAs, rests the
+      // unfilled remainder, and creates the user's USDC/YES/NO ATAs (fixing the
+      // earlier AccountNotInitialized 0xbc4 too).
+      const bid = await sweepCrossableLevels(
+        connection, program, provider, marketPk, yesMint, usdcMint, user, "bid", size, bidPrice, false,
       );
-      const askIx = await buildPlaceOrderIx(
-        program,
-        {
-          market: marketPk,
-          yesMint,
-          noMint,
-          usdcMint,
-          user,
-          userUsdc,
-          userYes,
-          userNo,
-          counterpartyUsdc: userUsdc,
-          counterpartyYes: userYes,
-          feeDestinationUsdc,
-        },
-        "ask",
-        askPrice,
-        size,
+      const ask = await sweepCrossableLevels(
+        connection, program, provider, marketPk, yesMint, usdcMint, user, "ask", size, askPrice, false,
       );
-      // place_order requires user_usdc, user_yes AND user_no to all exist (the
-      // position guard reads user_no; user_yes is in the account list even for a
-      // bid). Create all three idempotently before each order so a quote works
-      // on a market where the user has no token accounts yet.
-      const ataIxs = [
-        createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
-        createAssociatedTokenAccountIdempotentInstruction(user, userYes, user, yesMint),
-        createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
-      ];
-      const bidTx = new Transaction().add(...ataIxs, bidIx);
-      const askTx = new Transaction().add(...ataIxs, askIx);
-      const bidSig = await provider.sendAndConfirm(bidTx);
-      const askSig = await provider.sendAndConfirm(askTx);
       notify.success(
         `Quoted ${size} @ ${bidPrice}¢ / ${askPrice}¢ on ${target.ticker} > $${(target.strike / 100).toFixed(2)}.`,
       );
-      notify.info(`Bid: ${bidSig.slice(0, 12)}… · Ask: ${askSig.slice(0, 12)}…`);
+      notify.info(
+        `Bid ${bid.filledSize} filled / ${bid.restingSize} resting · Ask ${ask.filledSize} filled / ${ask.restingSize} resting`,
+      );
       onQuoted();
     } catch (err) {
       notify.error(
