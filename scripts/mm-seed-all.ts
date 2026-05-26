@@ -380,6 +380,8 @@ async function main() {
       failed++;
       console.error(`[mm-seed] ${label.padEnd(14)} FAILED: ${err instanceof Error ? err.message : String(err)}`);
     }
+    // Gentle pacing so devnet RPCs (Helius free tier) don't 429 the confirms.
+    await new Promise((r) => setTimeout(r, 400));
   }
 
   console.log(`\n[mm-seed] done — ${ok} seeded, ${failed} failed of ${active.length} markets.`);

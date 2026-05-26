@@ -124,6 +124,10 @@ export function buildAnchorContext(keypairPath: string): AnchorContext {
   const connection = new Connection(env.rpcUrl, {
     commitment: "confirmed",
     wsEndpoint: env.wsUrl,
+    // Devnet RPCs (Helius free tier) throttle confirmation polling under load;
+    // the default 30s timeout can fire even though the tx confirmed on-chain.
+    // Give confirmations more headroom so we don't abort a multi-step flow.
+    confirmTransactionInitialTimeout: 120_000,
   });
   const kp = loadKeypair(keypairPath);
   const wallet = new Wallet(kp);
