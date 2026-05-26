@@ -35,6 +35,7 @@ import {
   type StrikeRow,
 } from "@/lib/markets-client";
 import { marketStatus } from "@/lib/market-hours";
+import { reRollStrike } from "@/lib/admin-tx";
 import { env } from "@/lib/env";
 import { notify } from "@/lib/notify";
 import { useHoldingForMarket } from "@/lib/positions-client";
@@ -258,6 +259,7 @@ export function TradePageClient({ ticker, strike }: Props) {
               >
                 <MarketStatusChip />
                 {ticker} · {spotDollars != null ? fmt$(spotDollars) : "—"}
+                <DevReRollButton ticker={ticker} strike={strike} />
               </div>
             </div>
 
@@ -2073,4 +2075,63 @@ function settlesInLabel(expiryTs: number | null): string {
   const minutes = Math.floor((totalSec % 3600) / 60);
   if (hours >= 1) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+// ---------------------------------------------------------------------------
+// DEV (localnet only): re-roll this strike to a fresh future expiry so it stays
+// a non-expired, tradeable market past the 0DTE close — for continuing a demo
+// after 4 PM ET. Hidden on devnet/mainnet. create_strike_market isn't
+// admin-gated, so the connected funded wallet can do it.
+// ---------------------------------------------------------------------------
+function DevReRollButton({ ticker, strike }: { ticker: Ticker; strike: number }) {
+  const { connection } = useConnection();
+  const wallet = useWallet();
+  const [busy, setBusy] = useState(false);
+  const isLocalnet =
+    (env.rpcUrl || "").includes("localhost") || (env.rpcUrl || "").includes("127.0.0.1");
+  if (!isLocalnet) return null;
+
+  async function handle() {
+    if (!wallet.connected || !wallet.publicKey) {
+      notify.warning("Connect a funded demo wallet first.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await reRollStrike(connection, wallet, ticker, strike);
+      notify.success(
+        r.created
+          ? `Re-rolled ${ticker} $${(strike / 100).toFixed(2)} → fresh market expiring ${new Date(
+              r.expiryTs * 1000,
+            ).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric" })}. Keep trading.`
+          : `${ticker} $${(strike / 100).toFixed(2)} already has a fresh market at that expiry.`,
+      );
+    } catch (e) {
+      notify.error(`Re-roll failed: ${e instanceof Error ? e.message : "unknown"}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handle()}
+      disabled={busy}
+      title="DEV (localnet): create a fresh future-dated market for this strike so you can keep trading past the 0DTE close"
+      style={{
+        marginLeft: 8,
+        padding: "2px 8px",
+        fontSize: 10,
+        fontFamily: "var(--mono)",
+        background: "var(--bg-elev)",
+        border: "1px dashed var(--line-soft)",
+        borderRadius: 999,
+        color: "var(--text-3)",
+        cursor: "pointer",
+      }}
+    >
+      {busy ? "re-rolling…" : "↻ re-roll (dev)"}
+    </button>
+  );
 }

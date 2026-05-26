@@ -665,4 +665,76 @@ export async function createTodaysMarketsForTicker(
   return { ticker, previousCloseCents, expiryTs, strikes: results };
 }
 
+/**
+ * DEV (localnet): re-roll one (ticker, strike) to a FRESH FUTURE expiry so it
+ * stays a non-expired, tradeable market past the 0DTE close — for continuing a
+ * demo after 4 PM ET. Creates a new market PDA (`create_strike_market` +
+ * `init_market_books`) at `expiryTs` (default: tomorrow's 4 PM ET).
+ * `create_strike_market` isn't admin-gated, so any funded wallet can call it.
+ * Idempotent: a no-op if a market already exists at that exact expiry.
+ */
+export async function reRollStrike(
+  connection: Connection,
+  wallet: WalletContextState,
+  ticker: Ticker,
+  strike: number,
+  expiryTs: number = todayExpiryTsSeconds() + 86_400,
+): Promise<{ market: string; expiryTs: number; created: boolean }> {
+  const built = buildWriteProgram(connection, wallet);
+  if (!built) throw new Error("Program not configured");
+  if (!env.usdcMint) throw new Error("USDC mint not configured");
+  const { program, programId, provider } = built;
+
+  const usdcMint = new PublicKey(env.usdcMint);
+  const config = configPda(programId);
+  const market = marketPda(programId, ticker, strike, expiryTs);
+  const yesMint = yesMintPda(programId, market);
+  const noMint = noMintPda(programId, market);
+  const oracle = oraclePda(programId, ticker);
+  const orderbook = orderbookPda(programId, market);
+  const usdcEscrow = usdcEscrowPda(programId, market);
+  const yesEscrow = yesEscrowPda(programId, market);
+  const vault = getAssociatedTokenAddressSync(usdcMint, market, true);
+
+  try {
+    const createIx = await (program.methods as any)
+      .createStrikeMarket(ticker, new BN(strike), new BN(expiryTs))
+      .accounts({
+        config,
+        market,
+        yesMint,
+        noMint,
+        usdcMint,
+        vault,
+        oracle,
+        payer: wallet.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    const initIx = await (program.methods as any)
+      .initMarketBooks()
+      .accounts({
+        market,
+        yesMint,
+        usdcMint,
+        orderbook,
+        usdcEscrow,
+        yesEscrow,
+        payer: wallet.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+    await provider.sendAndConfirm(new Transaction().add(createIx, initIx));
+    return { market: market.toBase58(), expiryTs, created: true };
+  } catch (err) {
+    if (isAlreadyExistsError(err)) {
+      return { market: market.toBase58(), expiryTs, created: false };
+    }
+    throw err;
+  }
+}
+
 export { configPda, oraclePda, marketPda };

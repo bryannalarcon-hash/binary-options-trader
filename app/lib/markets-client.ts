@@ -794,7 +794,15 @@ export function useStrikeList(ticker: Ticker): {
       return;
     }
 
-    const active = markets.filter((m) => !m.settled);
+    // One row per strike: among non-settled markets, keep the LATEST-expiry one.
+    // This hides stale duplicate strikes (e.g. an expired batch lingering next to
+    // today's) and makes a dev "re-rolled" strike show once, as the fresh market.
+    const byStrike = new Map<number, Market>();
+    for (const m of markets.filter((x) => !x.settled)) {
+      const prev = byStrike.get(m.strike);
+      if (!prev || m.expiryTs > prev.expiryTs) byStrike.set(m.strike, m);
+    }
+    const active = [...byStrike.values()];
     if (active.length === 0) {
       setRows(EMPTY_STRIKE_ROWS);
       setError(false);

@@ -212,28 +212,26 @@ async function findMarketExpiry(
   ticker: string,
   strike: number,
 ): Promise<{ market: PublicKey; expiryTs: number } | null> {
-  const guess = todayExpiryTsSeconds();
-  const guessMarket = marketPda(programId, ticker, strike, guess);
-  try {
-    const acct = await (program.account as any).market.fetch(guessMarket);
-    if ((acct as any).ticker === ticker) {
-      return { market: guessMarket, expiryTs: guess };
-    }
-  } catch {
-    /* fall through to scan */
-  }
-
   try {
     const all = (await (program.account as any).market.all()) as Array<{
       publicKey: PublicKey;
-      account: { ticker: string; strike: BN; expiryTs: BN };
+      account: { ticker: string; strike: BN; expiryTs: BN; settled: boolean };
     }>;
-    const hit = all.find(
+    const matches = all.filter(
       (m) =>
         m.account.ticker === ticker &&
         Number(m.account.strike.toString()) === strike,
     );
-    if (!hit) return null;
+    if (matches.length === 0) return null;
+    // Prefer the LATEST-expiry market (so a dev "re-roll" of the strike, which
+    // creates a fresh future-dated market, is the one we trade — not the stale
+    // expired one), and among those an unsettled one.
+    matches.sort(
+      (a, b) =>
+        Number(b.account.expiryTs.toString()) -
+        Number(a.account.expiryTs.toString()),
+    );
+    const hit = matches.find((m) => !m.account.settled) ?? matches[0]!;
     return {
       market: hit.publicKey,
       expiryTs: Number(hit.account.expiryTs.toString()),
