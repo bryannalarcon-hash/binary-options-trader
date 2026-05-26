@@ -238,6 +238,7 @@ pnpm exec playwright test --config e2e/playwright.config.ts e2e/tests/<spec> --r
 | **`32-regression-wallet`** | **3** | **green** | connect (no false fail), Admin (demo) wallet, modal viewport-capped |
 | **`33-regression-data`** | **4** | **green** | de-mock / real spots, stale-mint guard, faucet smoke, portfolio math |
 | **`34-buy-bid-settle-redeem-matrix`** | **5** | **green** | buy YES/NO × fills/rests × settle win/lose × redeem — asserts on REAL on-chain balances via a ledger (USDC/YES/NO/escrow before→after deltas) |
+| **`35-regression-mm-quote`** | **1** | **green** | MM "Quote Both Sides" on a seeded book — a crossing quote must discover the maker + create the user's ATAs (regression for `0x1782` NotOrderOwner + `0xbc4` AccountNotInitialized; fixed by routing through `sweepCrossableLevels`) |
 
 **Re-verified THIS session (2026-05-25), on the new program with the position
 guard live:** anchor `meridian.test.ts` **39/39**; spec `34-buy-bid-settle-redeem-matrix`
