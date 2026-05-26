@@ -95,4 +95,7 @@ pub enum MeridianError {
 
     #[msg("Buying YES while holding NO requires a trailing assert_single_sided in the same transaction")]
     SingleSidedGuardMissing,
+
+    #[msg("Config account is not in a migratable layout (wrong owner or too small)")]
+    InvalidConfigLayout,
 }

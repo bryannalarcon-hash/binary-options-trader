@@ -1,6 +1,6 @@
 //! Meridian — binary options prediction market on Solana.
 //!
-//! Sixteen instructions; see `instructions/*.rs` for full handlers.
+//! Seventeen instructions; see `instructions/*.rs` for full handlers.
 
 use anchor_lang::prelude::*;
 
@@ -109,6 +109,14 @@ pub mod meridian {
     /// both-sides state can never persist past a tx boundary on the book path.
     pub fn assert_single_sided(ctx: Context<AssertSingleSided>) -> Result<()> {
         instructions::assert_single_sided::handler(ctx)
+    }
+
+    /// One-time migration: grow a pre-risk-params `Config` account to the current
+    /// layout (sets the new fields to defaults). Admin-gated, idempotent. Needed
+    /// for an in-place program upgrade on a cluster bootstrapped before the
+    /// configurable risk params existed.
+    pub fn migrate_config(ctx: Context<MigrateConfig>) -> Result<()> {
+        instructions::migrate_config::handler(ctx)
     }
 
     // -------- Settlement / oracle --------
