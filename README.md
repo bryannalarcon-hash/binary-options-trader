@@ -18,7 +18,7 @@ This is a technology demonstration deployed on Solana devnet (and fully runnable
 | Program ID | `DQgnoMXTD6Ebo7cgie6hpNjnVCtTnLVfjPcFc4JQZS19` |
 | Tests | anchor 39/39 + burner-driven Playwright (real on-chain) — full results in **[docs/TEST_RESULTS.md](docs/TEST_RESULTS.md)** |
 | AI usage | how this was built with AI — **[docs/AI_USAGE_LOG.md](docs/AI_USAGE_LOG.md)** |
-| Smart contract instructions | 16 |
+| Smart contract instructions | 17 |
 | Frontend pages | 5 of 5 |
 | On-chain trade flows | 4 of 4 (Buy/Sell Yes, Buy/Sell No) |
 | Position constraint | enforced **on-chain** (book path) + in UI — can't hold both Yes and No from trading |
