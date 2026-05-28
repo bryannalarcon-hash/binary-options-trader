@@ -11,6 +11,14 @@
  * React/Next-free so it's unit-testable in isolation (tests/unit).
  */
 
+/** Split an array into consecutive chunks of at most `size` (size >= 1). */
+export function chunk<T>(arr: readonly T[], size: number): T[][] {
+  const n = Math.max(1, Math.floor(size));
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
 /** The newest expiry among SETTLED markets, or null if none are settled. */
 export function latestSettledExpiry<T extends { settled: boolean; expiryTs: number }>(
   markets: readonly T[],

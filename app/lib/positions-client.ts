@@ -46,8 +46,10 @@ import {
 import type { Market, Side } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
-import { shouldStopLoading } from "./loading-state";
+import { shouldStopLoading, withTimeout } from "./loading-state";
 import { useAllMarkets } from "./markets-client";
+import { buildPositions } from "./positions-build";
+import { chunk } from "./resolved-strikes";
 import { MAG7_TICKERS, type Ticker } from "./tickers";
 import { useMounted } from "./use-mounted";
 
@@ -61,7 +63,66 @@ import { useMounted } from "./use-mounted";
  */
 const POSITIONS_LOADING_TIMEOUT_MS = 14_000;
 
+/**
+ * Hard ceiling on one balance/mid `refresh()` pass. Reading hundreds of settled
+ * markets one-RPC-at-a-time under a throttled devnet RPC could pin the skeleton
+ * forever; `withTimeout` resolves the pass to last-good/empty so loading is
+ * always terminal. The fast path (batched reads) normally finishes well under it.
+ */
+const POSITIONS_REFRESH_TIMEOUT_MS = 12_000;
+
+/** SPL token-account `amount` lives at byte offset 64 (u64 LE) in account data. */
+const SPL_AMOUNT_OFFSET = 64;
+
+/**
+ * History back-fill bounds. The seed scan does one `getTransaction` per
+ * signature; under a throttled devnet RPC with hundreds of settled-market
+ * signatures that pinned the History "Loading…" indefinitely. Cap the number of
+ * signatures, time-box each fetch, and stop back-filling once the budget
+ * elapses — the live `onLogs` subscription keeps the feed current after that.
+ */
+const HISTORY_SIG_LIMIT = 40;
+const HISTORY_SCAN_BUDGET_MS = 9_000;
+const HISTORY_TX_TIMEOUT_MS = 4_000;
+
 void MAG7_TICKERS;
+
+/**
+ * Batch-read SPL balances for many mints owned by `user` in a few
+ * `getMultipleAccounts` calls (100 keys each) instead of one `getAccount` per
+ * mint. Returns a map mint→amount; a missing ATA reads as 0. This is the single
+ * biggest cut to the portfolio's RPC load (hundreds of calls → a handful) and
+ * the main reason the positions section stops hanging after the close.
+ */
+async function readBalancesBatched(
+  connection: ReturnType<typeof useConnection>["connection"],
+  user: PublicKey,
+  mints: PublicKey[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (mints.length === 0) return out;
+  // ATA address is a pure derivation — no RPC.
+  const atas = mints.map((m) => ({
+    mint: m.toBase58(),
+    ata: getAssociatedTokenAddressSync(m, user),
+  }));
+  for (const group of chunk(atas, 100)) {
+    const infos = await connection.getMultipleAccountsInfo(
+      group.map((g) => g.ata),
+      "confirmed",
+    );
+    infos.forEach((info, i) => {
+      const mint = group[i]!.mint;
+      if (!info || info.data.length < SPL_AMOUNT_OFFSET + 8) {
+        out.set(mint, 0); // ATA doesn't exist yet → honest 0
+        return;
+      }
+      // Token account `amount` = u64 LE at offset 64.
+      out.set(mint, Number(info.data.readBigUInt64LE(SPL_AMOUNT_OFFSET)));
+    });
+  }
+  return out;
+}
 
 /**
  * A position the user holds. `entryPrice` is the REAL volume-weighted cost
@@ -326,51 +387,49 @@ export function useUserPositions(): {
     const built = makeReadOnlyProgram(connection);
     const basis = deriveCostBasis(events, markets);
 
+    // One bounded balance/mid pass. Returns null on timeout/error so loading
+    // always terminates (the after-hours "/portfolio loads forever" bug: with
+    // hundreds of settled markets, the old per-market RPC loop never finished
+    // under a throttled devnet RPC). Reads are now BATCHED via getMultipleAccounts.
+    async function refreshPass(): Promise<{ active: Position[]; settled: Position[] } | null> {
+      // 1. Batch every market's YES+NO balance in a few getMultipleAccounts calls.
+      const mints = markets.flatMap((m) => [new PublicKey(m.yesMint), new PublicKey(m.noMint)]);
+      const balances = await readBalancesBatched(connection, publicKey!, mints);
+
+      // 2. Book mid only for ACTIVE markets the user actually holds — settled
+      //    markets resolve to $1/$0 (no live mid), so we skip those reads entirely.
+      const midByMarket = new Map<string, number | null>();
+      if (built) {
+        const heldActive = markets.filter(
+          (m) =>
+            !m.settled &&
+            ((balances.get(m.yesMint) ?? 0) > 0 || (balances.get(m.noMint) ?? 0) > 0),
+        );
+        for (const m of heldActive) {
+          // eslint-disable-next-line no-await-in-loop
+          midByMarket.set(m.address, await bookMidCents(built.program, built.programId, m.address));
+        }
+      }
+
+      return buildPositions(markets, balances, basis, midByMarket);
+    }
+
     async function refresh() {
       if (cancelled || !publicKey) return;
       if (firstLoadRef.current) setLoading(true);
-      const activeOut: Position[] = [];
-      const settledOut: Position[] = [];
       try {
-        for (const m of markets) {
-          const yesMint = new PublicKey(m.yesMint);
-          const noMint = new PublicKey(m.noMint);
-          const [yesBal, noBal] = await Promise.all([
-            safeBalance(connection, publicKey, yesMint),
-            safeBalance(connection, publicKey, noMint),
-          ]);
-          const mid = built ? await bookMidCents(built.program, built.programId, m.address) : null;
-          const yesCurrent = mid;
-          const noCurrent = mid != null ? 100 - mid : null;
-
-          if ((yesBal ?? 0) > 0) {
-            const b = basis.get(`${m.address}|yes`);
-            const pos: Position = {
-              market: m,
-              side: "yes",
-              quantity: yesBal ?? 0,
-              entryPrice: b ? b.avgCents : null,
-              currentPrice: yesCurrent,
-            };
-            if (m.settled) settledOut.push(pos);
-            else activeOut.push(pos);
-          }
-          if ((noBal ?? 0) > 0) {
-            const b = basis.get(`${m.address}|no`);
-            const pos: Position = {
-              market: m,
-              side: "no",
-              quantity: noBal ?? 0,
-              entryPrice: b ? b.avgCents : null,
-              currentPrice: noCurrent,
-            };
-            if (m.settled) settledOut.push(pos);
-            else activeOut.push(pos);
-          }
-        }
+        const result = await withTimeout(refreshPass(), POSITIONS_REFRESH_TIMEOUT_MS, null);
         if (cancelled) return;
-        setActive(activeOut);
-        setSettled(settledOut);
+        if (result === null) {
+          // Timed out (or threw) — terminal: surface an error on first load,
+          // keep last-good data otherwise. NEVER stay an infinite skeleton.
+          if (firstLoadRef.current) setError(true);
+          setLoading(false);
+          firstLoadRef.current = false;
+          return;
+        }
+        setActive(result.active);
+        setSettled(result.settled);
         setError(false);
         setLoading(false);
         firstLoadRef.current = false;
@@ -379,6 +438,7 @@ export function useUserPositions(): {
           // Keep last-good positions; only surface an error on the first load.
           if (firstLoadRef.current) setError(true);
           setLoading(false);
+          firstLoadRef.current = false;
         }
       }
     }
@@ -636,17 +696,25 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean; er
         // own address always surfaces their trades regardless of program load.
         const sigs = await connection.getSignaturesForAddress(
           publicKey!,
-          { limit: 100 },
+          { limit: HISTORY_SIG_LIMIT },
           "confirmed",
         );
+        const deadline = Date.now() + HISTORY_SCAN_BUDGET_MS;
         for (const s of sigs) {
           if (cancelled) return;
           if (s.err) continue;
+          // Stop back-filling once the time budget elapses so "Loading…" can't
+          // hang on a throttled RPC; live onLogs covers anything not back-filled.
+          if (Date.now() > deadline) break;
           try {
-            const tx = await connection.getTransaction(s.signature, {
-              maxSupportedTransactionVersion: 0,
-              commitment: "confirmed",
-            });
+            const tx = await withTimeout(
+              connection.getTransaction(s.signature, {
+                maxSupportedTransactionVersion: 0,
+                commitment: "confirmed",
+              }),
+              HISTORY_TX_TIMEOUT_MS,
+              null,
+            );
             const logs = tx?.meta?.logMessages;
             if (!logs) continue;
             for (const ev of parser.parseLogs(logs)) {

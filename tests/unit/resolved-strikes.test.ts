@@ -1,6 +1,6 @@
 import { expect } from "chai";
 
-import { pickLatestSettledMarkets, latestSettledExpiry } from "../../app/lib/resolved-strikes";
+import { pickLatestSettledMarkets, latestSettledExpiry, chunk } from "../../app/lib/resolved-strikes";
 
 type M = { strike: number; expiryTs: number; settled: boolean };
 
@@ -52,5 +52,15 @@ describe("resolved strikes — latest settled expiry only", () => {
 
   it("returns [] when nothing is settled", () => {
     expect(pickLatestSettledMarkets([{ strike: 1, expiryTs: 1, settled: false }])).to.deep.equal([]);
+  });
+});
+
+describe("chunk (getMultipleAccounts batching)", () => {
+  it("splits into groups of at most size", () => {
+    expect(chunk([1, 2, 3, 4, 5], 2)).to.deep.equal([[1, 2], [3, 4], [5]]);
+  });
+  it("one chunk when size >= length; empty input → []", () => {
+    expect(chunk([1, 2], 100)).to.deep.equal([[1, 2]]);
+    expect(chunk([], 100)).to.deep.equal([]);
   });
 });
