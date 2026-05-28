@@ -47,6 +47,7 @@ import type { WalletContextState } from "@solana/wallet-adapter-react";
 
 import { env } from "./env";
 import idl from "./meridian-idl.json";
+import { nextTradingDayExpiryTs } from "./market-hours";
 import { MAG7_TICKERS, PYTH_FEED_ID, type Ticker } from "./tickers";
 
 // ---------------------------------------------------------------------------
@@ -732,6 +733,105 @@ export async function reRollStrike(
   } catch (err) {
     if (isAlreadyExistsError(err)) {
       return { market: market.toBase58(), expiryTs, created: false };
+    }
+    throw err;
+  }
+}
+
+export interface AddSyntheticStrikeResult {
+  ticker: Ticker;
+  strike: number;
+  expiryTs: number;
+  market: string;
+  created: boolean;
+}
+
+/**
+ * ADMIN: add a single synthetic strike at an ARBITRARY price + (future) expiry,
+ * via the admin-gated `add_strike` instruction bundled with `init_market_books`
+ * so it's immediately tradeable (book + escrows initialized). Unlike
+ * `createTodaysMarketsForTicker` (which keys off today's already-passed 4 PM
+ * expiry and the ±3/6/9% grid), this lets an operator spin up a fresh tradeable
+ * market AFTER the 0DTE close — the default expiry is the NEXT NYSE trading day's
+ * 4 PM ET close, so the new market is non-settled and surfaces in the strike
+ * chain as tradeable.
+ *
+ * `add_strike` requires the admin signer (reverts `AdminRequired` 0x1778
+ * otherwise). Idempotent: a no-op if a market already exists at that exact
+ * (ticker, strike, expiry).
+ *
+ * @param strikeCents  the strike in integer USD cents (e.g. 22000 = $220.00).
+ * @param expiryTs     unix seconds; defaults to the next trading day's 4 PM ET.
+ */
+export async function addSyntheticStrike(
+  connection: Connection,
+  wallet: WalletContextState,
+  ticker: Ticker,
+  strikeCents: number,
+  expiryTs: number = nextTradingDayExpiryTs(),
+): Promise<AddSyntheticStrikeResult> {
+  const built = buildWriteProgram(connection, wallet);
+  if (!built) throw new Error("Program not configured");
+  if (!env.usdcMint) throw new Error("USDC mint not configured");
+  const { program, programId, provider } = built;
+
+  const strike = Math.round(strikeCents);
+  if (!Number.isFinite(strike) || strike <= 0) {
+    throw new Error("Strike must be a positive number of cents");
+  }
+  if (!Number.isFinite(expiryTs) || expiryTs <= 0) {
+    throw new Error("Expiry must be a positive unix timestamp");
+  }
+
+  const usdcMint = new PublicKey(env.usdcMint);
+  const config = configPda(programId);
+  const market = marketPda(programId, ticker, strike, expiryTs);
+  const yesMint = yesMintPda(programId, market);
+  const noMint = noMintPda(programId, market);
+  const oracle = oraclePda(programId, ticker);
+  const orderbook = orderbookPda(programId, market);
+  const usdcEscrow = usdcEscrowPda(programId, market);
+  const yesEscrow = yesEscrowPda(programId, market);
+  const vault = getAssociatedTokenAddressSync(usdcMint, market, true);
+
+  try {
+    const addIx = await (program.methods as any)
+      .addStrike(ticker, new BN(strike), new BN(expiryTs))
+      .accounts({
+        config,
+        admin: wallet.publicKey,
+        market,
+        yesMint,
+        noMint,
+        usdcMint,
+        vault,
+        oracle,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const initIx = await (program.methods as any)
+      .initMarketBooks()
+      .accounts({
+        market,
+        yesMint,
+        usdcMint,
+        orderbook,
+        usdcEscrow,
+        yesEscrow,
+        payer: wallet.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    await provider.sendAndConfirm(new Transaction().add(addIx, initIx));
+    return { ticker, strike, expiryTs, market: market.toBase58(), created: true };
+  } catch (err) {
+    if (isAlreadyExistsError(err)) {
+      return { ticker, strike, expiryTs, market: market.toBase58(), created: false };
     }
     throw err;
   }

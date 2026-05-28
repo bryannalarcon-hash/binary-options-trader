@@ -53,10 +53,12 @@ import {
   settleMarket,
   setPaused,
   createTodaysMarketsForTicker,
+  addSyntheticStrike,
   todayExpiryTsSeconds,
   type ConfigState,
   type OracleState,
 } from "@/lib/admin-tx";
+import { nextTradingDayExpiryTs } from "@/lib/market-hours";
 
 /** Hard-coded reference admin pubkey (for the "import keys/admin.json" hint). */
 const ADMIN_PUBKEY = "6GQwLJDFmwdjngnKBXV5K6e5i7zM4ufHnwxyUvXeZayM";
@@ -287,6 +289,25 @@ export default function AdminPage() {
             ticker,
             previousCloseCents,
             existingStrikes,
+          );
+          refreshAll();
+          return res;
+        }}
+      />
+
+      <div style={{ height: 18 }} />
+
+      {/* 4b. SYNTHETIC STRIKE — single arbitrary strike, future expiry (after-hours) */}
+      <SyntheticStrikeControl
+        oracles={oracles}
+        canCreate={connected}
+        onAdd={async (ticker, strikeCents, expiryTs) => {
+          const res = await addSyntheticStrike(
+            connection,
+            wallet,
+            ticker,
+            strikeCents,
+            expiryTs,
           );
           refreshAll();
           return res;
@@ -960,6 +981,7 @@ function MarketCreation({
         Idempotent — existing markets are skipped. Expiry ={" "}
         <span className="mono">
           {new Date(expiryTs * 1000).toLocaleString("en-US", {
+            timeZone: "America/New_York",
             month: "short",
             day: "numeric",
             hour: "numeric",
@@ -1043,6 +1065,137 @@ function MarketCreation({
           ))}
         </div>
       )}
+    </Card>
+  );
+}
+
+// ===========================================================================
+// 4b. Synthetic strike — single arbitrary strike at a future expiry
+// ===========================================================================
+
+function SyntheticStrikeControl({
+  oracles,
+  canCreate,
+  onAdd,
+}: {
+  oracles: OracleState[];
+  canCreate: boolean;
+  onAdd: (
+    ticker: Ticker,
+    strikeCents: number,
+    expiryTs: number,
+  ) => Promise<{ strike: number; expiryTs: number; market: string; created: boolean }>;
+}) {
+  const [ticker, setTicker] = useState<Ticker>(MAG7_TICKERS[0]!);
+  const [strikeStr, setStrikeStr] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Default expiry = next NYSE trading day's 4 PM ET close, so the new market is
+  // non-settled + tradeable past today's 0DTE close. Computed once per mount,
+  // mirroring MarketCreation's todayExpiryTsSeconds() useMemo.
+  const expiryTs = useMemo(() => nextTradingDayExpiryTs(), []);
+  const oraclePrice = oracles.find((o) => o.ticker === ticker && o.exists)?.priceCents ?? null;
+
+  async function submit() {
+    const dollars = Number(strikeStr);
+    if (!Number.isFinite(dollars) || dollars <= 0) {
+      notify.warning("Enter a positive strike price in dollars.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await onAdd(ticker, Math.round(dollars * 100), expiryTs);
+      if (res.created) {
+        notify.success(
+          `Added ${ticker} $${(res.strike / 100).toFixed(2)} strike — ${shortKey(res.market)}`,
+        );
+        setStrikeStr("");
+      } else {
+        notify.info(`${ticker} $${(res.strike / 100).toFixed(2)} @ that expiry already exists.`);
+      }
+    } catch (err) {
+      reportTxError(`Add ${ticker} strike`, err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card>
+      <SectionTitle>Add synthetic strike</SectionTitle>
+      <div style={{ fontSize: 12.5, color: "var(--text-3)", marginBottom: 14 }}>
+        Admin-only. Adds ONE arbitrary strike via{" "}
+        <span className="mono">add_strike</span> +{" "}
+        <span className="mono">init_market_books</span> at the next trading day&apos;s
+        4:00 PM ET expiry, so it&apos;s a fresh tradeable market{" "}
+        <span style={{ color: "var(--text-2)" }}>even after today&apos;s close</span>. Expiry ={" "}
+        <span className="mono">
+          {new Date(expiryTs * 1000).toLocaleString("en-US", {
+            timeZone: "America/New_York",
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}
+        </span>{" "}
+        ET.
+      </div>
+
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <Label>Ticker</Label>
+          <select
+            className="field"
+            value={ticker}
+            onChange={(e) => setTicker(e.target.value as Ticker)}
+            style={{ height: 36, minWidth: 110 }}
+          >
+            {MAG7_TICKERS.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <Label>Strike (USD)</Label>
+          <div style={{ position: "relative" }}>
+            <span
+              style={{
+                position: "absolute",
+                left: 10,
+                top: "50%",
+                transform: "translateY(-50%)",
+                color: "var(--text-3)",
+                fontSize: 13,
+              }}
+            >
+              $
+            </span>
+            <input
+              className="field"
+              inputMode="decimal"
+              placeholder={oraclePrice != null ? (oraclePrice / 100).toFixed(2) : "0.00"}
+              value={strikeStr}
+              onChange={(e) => setStrikeStr(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void submit();
+              }}
+              style={{ width: 130, height: 36, paddingLeft: 22, fontFamily: "var(--mono)" }}
+            />
+          </div>
+        </div>
+
+        <Button
+          primary
+          disabled={!canCreate || busy}
+          onClick={() => void submit()}
+          leftIcon={<IconBolt size={13} />}
+        >
+          {busy ? "Adding…" : "Add strike"}
+        </Button>
+      </div>
     </Card>
   );
 }
