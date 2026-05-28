@@ -45,7 +45,7 @@ import { TICKER_NAME, PYTH_FEED_ID, type Ticker } from "@/lib/tickers";
 import { useUsdcBalance } from "@/lib/usdc";
 import { useMounted } from "@/lib/use-mounted";
 import { MarketStatusChip } from "@/components/MarketStatusChip";
-import type { Order, Side } from "@meridian/types";
+import type { Order, Outcome, Side } from "@meridian/types";
 
 interface Props {
   ticker: Ticker;
@@ -144,6 +144,25 @@ export function TradePageClient({ ticker, strike }: Props) {
   // hydration mismatch (Date.now() differs between server and client render).
   const settlesIn = mounted ? settlesInLabel(market?.expiryTs ?? null) : "—";
 
+  // Settled (read-only) market: after the 4 PM ET close the on-chain market is
+  // settled and `place_order` reverts AlreadySettled — so we switch the page to
+  // read-only (resolved banner + redeem path) and disable order entry. mint/
+  // redeem stay available. The settlement-time label is gated behind useMounted
+  // (it formats a Date) to stay hydration-safe.
+  const isSettled = !!market?.settled;
+  const settledOutcome = market?.outcome ?? null;
+  const settledPriceDollars =
+    market?.settlementPrice != null ? market.settlementPrice / 100 : null;
+  const settledAtLabel =
+    mounted && market?.settlementTs != null
+      ? new Date(market.settlementTs * 1000).toLocaleString("en-US", {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : null;
+
   return (
     <div className="page" style={{ paddingTop: 24 }}>
       {/* HEADER STRIP */}
@@ -161,6 +180,16 @@ export function TradePageClient({ ticker, strike }: Props) {
         spread={spread}
         settlesIn={settlesIn}
       />
+
+      {isSettled && (
+        <ResolvedBanner
+          ticker={ticker}
+          strikeDollars={strikeDollars}
+          outcome={settledOutcome}
+          settlementDollars={settledPriceDollars}
+          settledAtLabel={settledAtLabel}
+        />
+      )}
 
       <div
         style={{
@@ -375,6 +404,8 @@ export function TradePageClient({ ticker, strike }: Props) {
             estimated={priceEstimated}
             book={book}
             holding={holding}
+            settled={isSettled}
+            outcome={settledOutcome}
           />
           {/* Resting (unfilled) orders for THIS market, with Cancel. Renders
               nothing when there are none. yes/no may be null on an empty book —
@@ -1521,6 +1552,8 @@ function TradePanel({
   estimated,
   book,
   holding,
+  settled,
+  outcome,
 }: {
   ticker: Ticker;
   strikeCents: number;
@@ -1530,6 +1563,11 @@ function TradePanel({
   estimated: boolean;
   book: { bids: Order[]; asks: Order[] } | null;
   holding: { yes: number; no: number };
+  /** True once the market is settled — order entry is disabled (place_order
+   *  reverts AlreadySettled), mint/redeem stay available elsewhere. */
+  settled: boolean;
+  /** Winning side once settled, for the read-only summary. */
+  outcome: Outcome | null;
 }) {
   const mounted = useMounted();
   const wallet = useWallet();
@@ -1551,7 +1589,10 @@ function TradePanel({
   // but keep trading enabled so the deployment is fully interactive any time.
   const sessionOpen = !mounted || marketStatus() === "open";
   const isDevnet = env.cluster !== "mainnet-beta";
-  const tradingAllowed = sessionOpen || isDevnet;
+  // A SETTLED market hard-disables order entry regardless of cluster/session:
+  // place_order reverts AlreadySettled on-chain, so we never submit into a
+  // guaranteed revert. Mint/redeem live elsewhere and stay available.
+  const tradingAllowed = !settled && (sessionOpen || isDevnet);
 
   const [side, setSide] = useState<Side>("yes");
   const [action, setAction] = useState<"buy" | "sell">("buy");
@@ -1596,6 +1637,10 @@ function TradePanel({
   function handleSubmit() {
     if (!connected) {
       walletModal.setVisible(true);
+      return;
+    }
+    if (settled) {
+      notify.warning("Market resolved — trading is closed. Redeem winning tokens for $1 each.");
       return;
     }
     if (!tradingAllowed) {
@@ -1748,7 +1793,35 @@ function TradePanel({
           </button>
         </div>
 
-        {estimated && (
+        {settled && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: "10px 12px",
+              border: `1px solid ${outcome === "yes" ? "var(--up-line)" : "var(--down-line)"}`,
+              borderRadius: 6,
+              background: outcome === "yes" ? "var(--up-soft)" : "var(--down-soft)",
+              fontSize: 12,
+              lineHeight: 1.5,
+              color: "var(--text-2)",
+            }}
+          >
+            {outcome ? (
+              <>
+                Resolved ·{" "}
+                <strong style={{ color: outcome === "yes" ? "var(--up)" : "var(--down)" }}>
+                  {outcome === "yes" ? "Yes won" : "No won"}
+                </strong>
+                . Trading is closed; winning tokens redeem for $1 each in your
+                portfolio.
+              </>
+            ) : (
+              <>Awaiting settlement — this market has expired and is being resolved.</>
+            )}
+          </div>
+        )}
+
+        {!settled && estimated && (
           <div
             style={{
               marginTop: 8,
@@ -1933,7 +2006,21 @@ function TradePanel({
         </div>
 
         {/* CTA */}
-        {!connected ? (
+        {settled ? (
+          <Link
+            href="/portfolio"
+            className="btn lg"
+            style={{
+              width: "100%",
+              marginTop: 12,
+              display: "flex",
+              justifyContent: "center",
+              textDecoration: "none",
+            }}
+          >
+            Market resolved · Redeem in portfolio
+          </Link>
+        ) : !connected ? (
           <Button
             primary
             lg
@@ -2060,6 +2147,95 @@ function TradePanel({
         />
       )}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Resolved banner (read-only, after-hours)
+// ---------------------------------------------------------------------------
+function ResolvedBanner({
+  ticker,
+  strikeDollars,
+  outcome,
+  settlementDollars,
+  settledAtLabel,
+}: {
+  ticker: Ticker;
+  strikeDollars: number;
+  outcome: Outcome | null;
+  settlementDollars: number | null;
+  settledAtLabel: string | null;
+}) {
+  const yesWon = outcome === "yes";
+  const tone = outcome ? (yesWon ? "up" : "down") : null;
+  return (
+    <Card
+      padding={0}
+      style={{
+        overflow: "hidden",
+        marginTop: 12,
+        borderColor: tone ? `var(--${tone}-line)` : "var(--line-soft)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 12,
+          padding: "14px 18px",
+          background: tone ? `var(--${tone}-soft)` : "var(--bg-elev-2)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <span
+            className="pill"
+            style={{
+              background: tone ? `var(--${tone}-soft)` : "var(--bg-elev)",
+              color: tone ? `var(--${tone})` : "var(--text-3)",
+              borderColor: tone ? `var(--${tone}-line)` : "var(--line-soft)",
+              fontWeight: 600,
+            }}
+          >
+            {outcome ? `Resolved · ${yesWon ? "Yes" : "No"} won` : "Awaiting settlement"}
+          </span>
+          <span style={{ fontSize: 13, color: "var(--text-2)" }}>
+            {ticker} ${strikeDollars.toFixed(2)} ·{" "}
+            {outcome
+              ? `${yesWon ? "Closed at or above" : "Closed below"} the strike. Trading is closed — read-only.`
+              : "This market has expired and is being settled. Trading is closed."}
+          </span>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 20,
+            fontFamily: "var(--mono)",
+            fontSize: 12,
+            color: "var(--text-3)",
+          }}
+        >
+          <span>
+            Settle close{" "}
+            <span style={{ color: "var(--text)" }}>
+              {settlementDollars != null ? fmt$(settlementDollars) : "—"}
+            </span>
+          </span>
+          <span>
+            Settled{" "}
+            <span style={{ color: "var(--text)" }}>{settledAtLabel ?? "—"}</span>
+          </span>
+          <Link
+            href="/portfolio"
+            className="btn sm"
+            style={{ textDecoration: "none" }}
+          >
+            Redeem in portfolio
+          </Link>
+        </div>
+      </div>
+    </Card>
   );
 }
 

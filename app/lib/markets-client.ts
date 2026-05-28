@@ -36,8 +36,20 @@ import {
 
 import type { Market, Order, OrderBookSnapshot, Outcome, Side, Ticker as TypesTicker } from "@meridian/types";
 import { env } from "./env";
+import { withTimeout } from "./loading-state";
 import idl from "./meridian-idl.json";
 import { MAG7_TICKERS, type Ticker } from "./tickers";
+
+/**
+ * Bounded timeout (ms) for the `market.all()` getProgramAccounts read. Under
+ * devnet RPC throttling that call can hang indefinitely; we race it so the
+ * loading state is TERMINAL — it resolves to an honest error/empty state within
+ * this window instead of pinning `loading=true` forever (the after-hours
+ * "/portfolio loads infinitely" bug). 12s is well past a healthy RPC round-trip.
+ */
+const MARKETS_READ_TIMEOUT_MS = 12_000;
+/** Sentinel for a timed-out / failed read, distinguished from a real empty []. */
+const MARKETS_TIMEOUT = Symbol("markets-read-timeout");
 
 const MAG7_SET = new Set<string>(MAG7_TICKERS);
 const ORDERBOOK_SEED = Buffer.from("orderbook");
@@ -64,6 +76,21 @@ export interface StrikeRow {
    * false when they come from the real order-book mid.
    */
   estimated: boolean;
+  /**
+   * Display status for the row. Active (tradeable) rows from `useStrikeList`
+   * leave this `undefined`. Rows from `useResolvedStrikeList` carry:
+   *   - "resolved":  market.settled === true (outcome known).
+   *   - "expired":   expiry has passed but the market isn't settled yet
+   *                  (awaiting the settle crank).
+   * Set only on the resolved/read-only path so the active contract is unchanged.
+   */
+  status?: "resolved" | "expired";
+  /** Settled outcome (which side won), only on resolved rows. */
+  outcome?: Outcome | null;
+  /** Frozen settlement price in cents, only on resolved rows. */
+  settlementPrice?: number | null;
+  /** Settlement unix-seconds timestamp, only on resolved rows. */
+  settlementTs?: number | null;
 }
 
 // Stable empty reference so `setRows(EMPTY_STRIKE_ROWS)` is a no-op once already
@@ -178,10 +205,26 @@ export function useAllMarkets(): { markets: Market[]; loading: boolean; error: b
         return;
       }
       try {
-        const raw = (await (built.program.account as any).market.all()) as Array<{
-          publicKey: PublicKey;
-          account: Record<string, unknown>;
-        }>;
+        // Race the getProgramAccounts read against a bounded timeout so a hung
+        // devnet RPC can't pin loading=true forever. On timeout we get the
+        // sentinel → treated as a read error (honest empty/error state), never
+        // a fake empty market list.
+        const raw = await withTimeout<
+          | Array<{ publicKey: PublicKey; account: Record<string, unknown> }>
+          | typeof MARKETS_TIMEOUT
+        >(
+          (built.program.account as any).market.all(),
+          MARKETS_READ_TIMEOUT_MS,
+          MARKETS_TIMEOUT,
+        );
+        if (cancelled) return;
+        if (raw === MARKETS_TIMEOUT) {
+          // Read didn't settle in time — surface a terminal error state. Keep
+          // any last-good markets we already had; the 10s poll will retry.
+          setError(true);
+          setLoading(false);
+          return;
+        }
         const decoded = raw
           .map((r) => decodeOnChainMarket(r))
           .filter((m): m is Market => m !== null);
@@ -854,4 +897,68 @@ export function useStrikeList(ticker: Ticker): {
   }, [connection, markets, marketsLoading, marketsError, spotUsd]);
 
   return { rows, loading, error };
+}
+
+/**
+ * Hook: SETTLED (read-only) strike rows for a ticker — the after-hours,
+ * Polymarket-style view. After the 4:00 PM ET close every 0DTE market becomes
+ * `settled=true`; `useStrikeList` (active-only) goes empty, so we surface those
+ * settled markets here for DISPLAY without touching that active contract.
+ *
+ * One row per strike (the LATEST-expiry settled market for that strike — mirrors
+ * useStrikeList's de-dup so a re-rolled/old batch doesn't double up). Each row
+ * carries FROZEN settlement info:
+ *   - status:          "resolved" when settled, "expired" if expiry passed but
+ *                      not yet settled (awaiting the settle crank).
+ *   - outcome:         which side won (null until settled).
+ *   - yes/noCents:     100/0 for the winning side once resolved (the frozen
+ *                      last price is the deterministic $1/$0 settlement, not a
+ *                      synthesized quote); 50/50 placeholder only while expired-
+ *                      but-unsettled, flagged via `estimated`.
+ *   - settlementPrice: frozen close in cents.
+ *   - settlementTs:    settlement time (unix seconds).
+ *
+ * NEVER synthesizes a price: resolved cents come straight from the on-chain
+ * outcome; an awaiting-settlement row is clearly marked estimated.
+ */
+export function useResolvedStrikeList(ticker: Ticker): {
+  rows: StrikeRow[];
+  loading: boolean;
+  error: boolean;
+} {
+  const { markets, loading: marketsLoading, error: marketsError } = useMarketsForTicker(ticker);
+  const volumeless = 0; // settled rows carry no live volume (no fills post-close)
+
+  const rows = useMemo<StrikeRow[]>(() => {
+    // One row per strike: among SETTLED markets, keep the latest-expiry one.
+    const byStrike = new Map<number, Market>();
+    for (const m of markets.filter((x) => x.settled)) {
+      const prev = byStrike.get(m.strike);
+      if (!prev || m.expiryTs > prev.expiryTs) byStrike.set(m.strike, m);
+    }
+    const out: StrikeRow[] = [];
+    for (const m of byStrike.values()) {
+      // Resolved: the winning side is worth 100¢, the other 0¢ — the REAL $1/$0
+      // settlement, not an estimate. We still mark estimated=false because this
+      // is the deterministic on-chain payout, not a book mid.
+      const yesWon = m.outcome === "yes";
+      const yesCents = m.outcome ? (yesWon ? 100 : 0) : 50;
+      out.push({
+        strike: m.strike,
+        yesCents,
+        noCents: 100 - yesCents,
+        volume: volumeless,
+        // No outcome yet (expired, awaiting settle) → the 50/50 is a placeholder.
+        estimated: !m.outcome,
+        status: m.outcome ? "resolved" : "expired",
+        outcome: m.outcome,
+        settlementPrice: m.settlementPrice,
+        settlementTs: m.settlementTs,
+      });
+    }
+    out.sort((a, b) => a.strike - b.strike);
+    return out;
+  }, [markets]);
+
+  return { rows, loading: marketsLoading, error: marketsError };
 }

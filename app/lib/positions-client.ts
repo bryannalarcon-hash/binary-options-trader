@@ -46,9 +46,20 @@ import {
 import type { Market, Side } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
+import { shouldStopLoading } from "./loading-state";
 import { useAllMarkets } from "./markets-client";
 import { MAG7_TICKERS, type Ticker } from "./tickers";
 import { useMounted } from "./use-mounted";
+
+/**
+ * Bounded timeout (ms) before the positions skeleton MUST resolve to a terminal
+ * state (real positions / "No active positions" / error), even if `useAllMarkets`
+ * never settles. `useAllMarkets` already races its own RPC read; this is a
+ * defensive backstop so the section is never an infinite skeleton after the
+ * close. Slightly longer than the markets read timeout so the upstream error
+ * normally arrives first.
+ */
+const POSITIONS_LOADING_TIMEOUT_MS = 14_000;
 
 void MAG7_TICKERS;
 
@@ -256,6 +267,18 @@ export function useUserPositions(): {
   // show the loading skeleton on the very first load (not every poll), and never
   // blank good data on a transient read error → no data↔skeleton flicker.
   const firstLoadRef = useRef(true);
+  // Bounded-timeout backstop: flips true once the loading timeout elapses so the
+  // skeleton resolves to a terminal empty/error state even if markets never
+  // arrive (devnet RPC hang) — the after-hours "/portfolio loads forever" bug.
+  const [timedOut, setTimedOut] = useState(false);
+
+  // Arm a single timeout per (wallet, reload) so the first load can't hang.
+  useEffect(() => {
+    if (!mounted || !publicKey) return;
+    setTimedOut(false);
+    const t = window.setTimeout(() => setTimedOut(true), POSITIONS_LOADING_TIMEOUT_MS);
+    return () => window.clearTimeout(t);
+  }, [mounted, publicKey, reloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -276,15 +299,27 @@ export function useUserPositions(): {
     if (markets.length === 0) {
       // Distinguish "markets still loading" from "genuinely none": hold the
       // loading state during the initial fetch instead of flashing an empty
-      // "no positions" panel before markets arrive.
-      if (marketsLoading && firstLoadRef.current) {
+      // "no positions" panel before markets arrive — BUT make that terminal.
+      // shouldStopLoading resolves the skeleton once markets finish/err, once
+      // it's no longer the first load, or once the bounded timeout elapses (a
+      // hung getProgramAccounts RPC must NOT pin loading=true forever).
+      const stop = shouldStopLoading(
+        marketsLoading,
+        marketsError,
+        firstLoadRef.current,
+        timedOut,
+      );
+      if (!stop) {
         setLoading(true);
         return;
       }
       setActive([]);
       setSettled([]);
-      setError(marketsError);
+      // A timeout with no upstream error is still an honest "couldn't read" —
+      // surface error so the UI shows a notice rather than a bare empty state.
+      setError(marketsError || timedOut);
       setLoading(false);
+      firstLoadRef.current = false;
       return;
     }
 
@@ -354,7 +389,7 @@ export function useUserPositions(): {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [connection, publicKey, mounted, markets, marketsLoading, marketsError, events, reloadKey]);
+  }, [connection, publicKey, mounted, markets, marketsLoading, marketsError, events, reloadKey, timedOut]);
 
   const summary = useMemo(() => aggregate(active, settled), [active, settled]);
   const refetch = () => setReloadKey((k) => k + 1);

@@ -45,7 +45,7 @@ export default function PortfolioPage() {
   const [connectOpen, setConnectOpen] = useState(false);
   const connected = mounted && wallet.connected;
   const usdc = useUsdcBalance();
-  const { active, settled, loading, refetch } = useUserPositions();
+  const { active, settled, loading, error, refetch } = useUserPositions();
   const [redeemTarget, setRedeemTarget] = useState<Position[] | null>(null);
 
   // Hold a stable loading state until autoConnect resolves, so we don't flash
@@ -234,6 +234,23 @@ export default function PortfolioPage() {
                 }}
               />
             ))}
+          </div>
+        ) : error && active.length === 0 ? (
+          // Terminal error state: the on-chain read couldn't complete (e.g. an
+          // RPC hang after the close). Never an infinite skeleton — show an
+          // honest notice with a retry instead.
+          <div style={{ padding: 36, textAlign: "center" }}>
+            <p style={{ color: "var(--text-3)", fontSize: 14 }}>
+              Couldn&apos;t read positions from the chain (RPC timed out).
+            </p>
+            <button
+              type="button"
+              className="btn primary"
+              style={{ marginTop: 12 }}
+              onClick={() => refetch()}
+            >
+              Retry
+            </button>
           </div>
         ) : active.length === 0 ? (
           <div style={{ padding: 36, textAlign: "center" }}>

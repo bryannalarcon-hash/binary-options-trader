@@ -19,10 +19,12 @@ import {
 import { MarketStatusChip } from "@/components/MarketStatusChip";
 import {
   useAllMarkets,
+  useResolvedStrikeList,
   useSpotPrice,
   useStrikeList,
   type StrikeRow,
 } from "@/lib/markets-client";
+import { pickRedirectStrike } from "@/lib/trade-redirect";
 import { useMounted } from "@/lib/use-mounted";
 import { MAG7_TICKERS, TICKER_NAME, type Ticker } from "@/lib/tickers";
 import type { Market } from "@meridian/types";
@@ -243,19 +245,28 @@ interface StockRow {
 
 function StockCard({ stock }: { stock: StockRow }) {
   const router = useRouter();
-  const { rows: chain, loading: chainLoading } = useStrikeList(stock.sym);
+  const { rows: activeChain, loading: chainLoading } = useStrikeList(stock.sym);
+  const { rows: settledChain } = useResolvedStrikeList(stock.sym);
   const { spotUsd } = useSpotPrice(stock.sym);
   const spotCents = spotUsd != null ? Math.round(spotUsd * 100) : null;
+  // After the close the active chain is empty; fall back to settled (read-only)
+  // strikes so the card still shows resolved outcomes instead of only spot.
+  const resolvedView = activeChain.length === 0 && settledChain.length > 0;
+  const chain = resolvedView ? settledChain : activeChain;
   const atm = atmFromRows(chain, spotCents);
   // Real volume = sum of observed OrderMatched fills across this ticker's
-  // strikes; 0 until any fill is seen.
+  // strikes; 0 until any fill is seen (settled rows carry no live volume).
   const totalVol = chain.reduce((sum, c) => sum + c.volume, 0);
-  // Link to the ATM strike when known, else the first available strike.
-  const href = atm != null
-    ? `/trade/${stock.sym}/${atm}`
-    : chain.length > 0
-      ? `/trade/${stock.sym}/${chain[0]!.strike}`
-      : `/trade/${stock.sym}`;
+  // Link to a REAL strike: ATM active, else ATM settled, else /markets — reuse
+  // the same pure decision the redirect page uses so they never disagree.
+  const redirectTarget = pickRedirectStrike(
+    activeChain.map((c) => c.strike),
+    settledChain.map((c) => c.strike),
+    spotCents,
+  );
+  const href = redirectTarget != null
+    ? `/trade/${stock.sym}/${redirectTarget}`
+    : "/markets";
 
   return (
     <div
@@ -352,7 +363,8 @@ function StockCard({ stock }: { stock: StockRow }) {
               <span style={{ color: "var(--text-3)" }}>loading…</span>
             ) : (
               <>
-                <span style={{ color: "var(--text-2)" }}>{chain.length}</span> strikes
+                <span style={{ color: "var(--text-2)" }}>{chain.length}</span>{" "}
+                {resolvedView ? "resolved" : "strikes"}
               </>
             )}
           </div>
@@ -368,6 +380,10 @@ function StockCard({ stock }: { stock: StockRow }) {
           >
             {chain.map((c) => {
               const isAtm = c.strike === atm;
+              // Resolved cell: show the winning side label + frozen close, not a
+              // live mid. "Awaiting" when expired but not yet settled.
+              const resolved = c.status === "resolved" && c.outcome != null;
+              const awaiting = c.status === "expired";
               const winner = Math.max(c.yesCents, c.noCents);
               const winnerSide = c.yesCents > c.noCents ? "up" : "down";
               return (
@@ -392,19 +408,41 @@ function StockCard({ stock }: { stock: StockRow }) {
                     textDecoration: "none",
                     color: "var(--text)",
                   }}
+                  title={
+                    resolved
+                      ? `Resolved · ${c.outcome === "yes" ? "Yes" : "No"} won`
+                      : awaiting
+                        ? "Awaiting settlement"
+                        : undefined
+                  }
                 >
                   <span style={{ fontSize: 10, color: "var(--text-3)" }}>
                     ${(c.strike / 100).toFixed(0)}
                   </span>
-                  <span
-                    style={{
-                      fontSize: 11,
-                      color: `var(--${winnerSide})`,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {winner}¢
-                  </span>
+                  {resolved ? (
+                    <span
+                      style={{
+                        fontSize: 10,
+                        color: `var(--${c.outcome === "yes" ? "up" : "down"})`,
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {c.outcome} ✓
+                    </span>
+                  ) : awaiting ? (
+                    <span style={{ fontSize: 9, color: "var(--text-3)" }}>settling…</span>
+                  ) : (
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: `var(--${winnerSide})`,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {winner}¢
+                    </span>
+                  )}
                 </Link>
               );
             })}
@@ -441,16 +479,24 @@ function StockCard({ stock }: { stock: StockRow }) {
 // Stock list row
 // ---------------------------------------------------------------------------
 function StockListRow({ stock }: { stock: StockRow }) {
-  const { rows: chain } = useStrikeList(stock.sym);
+  const { rows: activeChain } = useStrikeList(stock.sym);
+  const { rows: settledChain } = useResolvedStrikeList(stock.sym);
   const { spotUsd } = useSpotPrice(stock.sym);
   const spotCents = spotUsd != null ? Math.round(spotUsd * 100) : null;
+  // After the close show settled (read-only) strikes instead of just spot.
+  const resolvedView = activeChain.length === 0 && settledChain.length > 0;
+  const chain = resolvedView ? settledChain : activeChain;
   const atm = atmFromRows(chain, spotCents);
   const totalVol = chain.reduce((sum, c) => sum + c.volume, 0);
-  const navTarget = atm != null
-    ? `/trade/${stock.sym}/${atm}`
-    : chain.length > 0
-      ? `/trade/${stock.sym}/${chain[0]!.strike}`
-      : `/trade/${stock.sym}`;
+  // Real strike target (ATM active → ATM settled → /markets), shared helper.
+  const redirectTarget = pickRedirectStrike(
+    activeChain.map((c) => c.strike),
+    settledChain.map((c) => c.strike),
+    spotCents,
+  );
+  const navTarget = redirectTarget != null
+    ? `/trade/${stock.sym}/${redirectTarget}`
+    : "/markets";
 
   return (
     <tr
@@ -480,6 +526,8 @@ function StockListRow({ stock }: { stock: StockRow }) {
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
           {chain.map((c) => {
             const isAtm = c.strike === atm;
+            const resolved = c.status === "resolved" && c.outcome != null;
+            const awaiting = c.status === "expired";
             const winner = Math.max(c.yesCents, c.noCents);
             const winnerSide = c.yesCents > c.noCents ? "up" : "down";
             return (
@@ -487,6 +535,13 @@ function StockListRow({ stock }: { stock: StockRow }) {
                 key={c.strike}
                 href={`/trade/${stock.sym}/${c.strike}`}
                 onClick={(e) => e.stopPropagation()}
+                title={
+                  resolved
+                    ? `Resolved · ${c.outcome === "yes" ? "Yes" : "No"} won`
+                    : awaiting
+                      ? "Awaiting settlement"
+                      : undefined
+                }
                 style={{
                   padding: "5px 8px",
                   background: isAtm ? "var(--accent-soft)" : "var(--bg-elev-2)",
@@ -507,14 +562,29 @@ function StockListRow({ stock }: { stock: StockRow }) {
                 <span style={{ color: "var(--text-3)", fontSize: 10 }}>
                   {(c.strike / 100).toFixed(0)}
                 </span>
-                <span
-                  style={{
-                    color: `var(--${winnerSide})`,
-                    fontWeight: 600,
-                  }}
-                >
-                  {winner}¢
-                </span>
+                {resolved ? (
+                  <span
+                    style={{
+                      color: `var(--${c.outcome === "yes" ? "up" : "down"})`,
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                      fontSize: 10,
+                    }}
+                  >
+                    {c.outcome} ✓
+                  </span>
+                ) : awaiting ? (
+                  <span style={{ color: "var(--text-3)", fontSize: 9 }}>settling…</span>
+                ) : (
+                  <span
+                    style={{
+                      color: `var(--${winnerSide})`,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {winner}¢
+                  </span>
+                )}
               </Link>
             );
           })}
