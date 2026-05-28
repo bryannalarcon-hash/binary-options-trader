@@ -43,14 +43,18 @@ export function WalletProviderWrapper({ children }: { children: ReactNode }) {
   // localnet (env.faucetUrl set) — never a keys-in-browser wallet on mainnet.
   const wallets = useMemo(() => {
     if (!env.faucetUrl) return [];
-    const isLocalnet = endpoint.includes("localhost") || endpoint.includes("127.0.0.1");
     // Burner "Demo Wallet 1/2" wherever a faucet is configured (localnet + devnet).
     // The "Admin (demo)" wallet fetches the config-admin key from /api/admin-key,
-    // which is hard-gated to localnet — so only register it there (it would just
-    // 403 on a devnet/public deploy).
-    return isLocalnet
-      ? [new BurnerWalletAdapter(1), new BurnerWalletAdapter(2), new AdminWalletAdapter()]
-      : [new BurnerWalletAdapter(1), new BurnerWalletAdapter(2)];
+    // which now serves on localnet + devnet (hard-refused only on mainnet — the
+    // key is a throwaway devnet/localnet dev key, no real funds). So register it
+    // everywhere except a mainnet build.
+    const isMainnet =
+      env.cluster === "mainnet-beta" ||
+      env.cluster === "mainnet" ||
+      endpoint.includes("mainnet");
+    return isMainnet
+      ? [new BurnerWalletAdapter(1), new BurnerWalletAdapter(2)]
+      : [new BurnerWalletAdapter(1), new BurnerWalletAdapter(2), new AdminWalletAdapter()];
   }, [endpoint]);
 
   const onError = useCallback((error: WalletError) => {
