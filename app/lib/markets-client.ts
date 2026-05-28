@@ -38,6 +38,7 @@ import type { Market, Order, OrderBookSnapshot, Outcome, Side, Ticker as TypesTi
 import { env } from "./env";
 import { withTimeout } from "./loading-state";
 import idl from "./meridian-idl.json";
+import { pickLatestSettledMarkets } from "./resolved-strikes";
 import { MAG7_TICKERS, type Ticker } from "./tickers";
 
 /**
@@ -930,14 +931,13 @@ export function useResolvedStrikeList(ticker: Ticker): {
   const volumeless = 0; // settled rows carry no live volume (no fills post-close)
 
   const rows = useMemo<StrikeRow[]>(() => {
-    // One row per strike: among SETTLED markets, keep the latest-expiry one.
-    const byStrike = new Map<number, Market>();
-    for (const m of markets.filter((x) => x.settled)) {
-      const prev = byStrike.get(m.strike);
-      if (!prev || m.expiryTs > prev.expiryTs) byStrike.set(m.strike, m);
-    }
+    // Show ONLY the most-recent settled day's grid (~6 strikes). Settled markets
+    // from multiple past expiries accumulate on-chain, and each day's ±3/6/9%
+    // grid has different strike values — de-duping by strike value would surface
+    // all of them (e.g. 18 across three days). pickLatestSettledMarkets collapses
+    // to the single latest settled expiry.
     const out: StrikeRow[] = [];
-    for (const m of byStrike.values()) {
+    for (const m of pickLatestSettledMarkets(markets)) {
       // Resolved: the winning side is worth 100¢, the other 0¢ — the REAL $1/$0
       // settlement, not an estimate. We still mark estimated=false because this
       // is the deterministic on-chain payout, not a book mid.
