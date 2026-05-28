@@ -7,7 +7,7 @@
     "outDir": "./dist",
     "noEmit": true
   },
-  "include": ["anchor/**/*", "e2e/**/*"],
+  "include": ["anchor/**/*", "e2e/**/*", "unit/**/*"],
   "ts-node": {
     "transpileOnly": true,
     "compilerOptions": {

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "test:unit": "mocha -t 60000 'unit/**/*.test.ts'",
     "test:anchor": "mocha -t 1000000 anchor/**/*.test.ts",
     "test:anchor:integration": "mocha -t 1000000 anchor/integration.test.ts",
     "test:anchor:edge": "mocha -t 1000000 anchor/edge-cases.test.ts",
@@ -27,7 +28,6 @@
   },
   "mocha": {
     "require": "ts-node/register",
-    "extensions": ["ts"],
-    "spec": ["anchor/**/*.test.ts"]
+    "extensions": ["ts"]
   }
 }
