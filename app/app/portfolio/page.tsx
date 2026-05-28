@@ -309,7 +309,8 @@ export default function PortfolioPage() {
                 fontSize: 13,
               }}
             >
-              Nothing settled yet — markets close at 4:00 PM ET.
+              No settled positions. Once you hold a position into a market&apos;s
+              4:00 PM ET settlement, it shows here — winners redeem for $1.00 per token.
             </div>
           ) : (
             <table className="tbl">
