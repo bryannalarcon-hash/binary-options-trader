@@ -55,6 +55,7 @@ import type { WalletContextState } from "@solana/wallet-adapter-react";
 import type { Side } from "@meridian/types";
 import { env } from "./env";
 import { planRedeemAmount } from "./redeem-plan";
+import { chunk } from "./resolved-strikes";
 import idl from "./meridian-idl.json";
 import type { Ticker } from "./tickers";
 import { logTradeAction } from "./trade-log";
@@ -94,6 +95,8 @@ export interface RedeemResult {
   redeemedCount: number;
   /** How many were skipped (no on-chain balance — e.g. already redeemed). */
   skippedCount: number;
+  /** How many redeem txs errored (RPC/contract). */
+  failedCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1338,114 +1341,113 @@ export async function buildAndSendRedeem(
       totalPayoutCents,
       redeemedCount: args.markets.length,
       skippedCount: 0,
+      failedCount: 0,
     };
   }
   const { program, programId, provider } = built;
 
   const usdcMint = new PublicKey(env.usdcMint);
+  const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
   let lastSig = "";
   let redeemedCount = 0;
   let skippedCount = 0;
+  let failedCount = 0;
   let paidCents = 0;
 
-  for (const m of args.markets) {
-    try {
-      // Redeem the EXACT market PDA carried by the position — NOT a
-      // (ticker, strike) re-resolution. The same strike can have settled markets
-      // across multiple expiry days; resolving by (ticker, strike) picked the
-      // wrong expiry's market (wrong mints) and reverted NotEnoughBalance (0x177e).
-      const market = new PublicKey(m.address);
-      const yesMint = yesMintPda(programId, market);
-      const noMint = noMintPda(programId, market);
-      const vault = getAssociatedTokenAddressSync(usdcMint, market, true);
-      const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
-      const userYes = getAssociatedTokenAddressSync(yesMint, user);
-      const userNo = getAssociatedTokenAddressSync(noMint, user);
+  // Precompute each position's EXACT market PDA + ATAs (pure, no RPC). We redeem
+  // m.address directly — NOT a (ticker, strike) re-resolution — because the same
+  // strike can have settled markets across multiple expiry days, and resolving by
+  // (ticker, strike) hit the wrong market's mints → NotEnoughBalance (0x177e).
+  const plans = args.markets.map((m) => {
+    const market = new PublicKey(m.address);
+    const yesMint = yesMintPda(programId, market);
+    const noMint = noMintPda(programId, market);
+    return {
+      m,
+      market,
+      yesMint,
+      noMint,
+      vault: getAssociatedTokenAddressSync(usdcMint, market, true),
+      userYes: getAssociatedTokenAddressSync(yesMint, user),
+      userNo: getAssociatedTokenAddressSync(noMint, user),
+    };
+  });
 
-      // Clamp to the LIVE on-chain balance so a stale cached quantity can never
-      // over-ask (the other source of NotEnoughBalance). 0 → skip, don't send a
-      // doomed tx (e.g. the side was already redeemed).
-      const sideAta = m.side === "yes" ? userYes : userNo;
-      let held = 0;
-      try {
-        const bal = await connection.getTokenAccountBalance(sideAta, "confirmed");
-        held = Number(bal.value.amount);
-      } catch {
-        held = 0; // ATA missing → nothing to redeem
-      }
-      const amount = planRedeemAmount(m.quantity, held);
-      if (amount <= 0) {
-        logTradeAction({
-          action: "redeem",
-          ticker: m.ticker,
-          strike: m.strike,
-          side: m.side,
-          qty: 0,
-          priceCents: null,
-          feeCents: 0,
-          txSig: null,
-          status: "failed",
-          error: "nothing to redeem (no balance — already redeemed?)",
-        });
-        skippedCount++;
-        continue;
-      }
+  // BATCH-read every position's side balance in a few getMultipleAccounts calls
+  // instead of one balance round-trip per market.
+  const sideAtas = plans.map((p) => (p.m.side === "yes" ? p.userYes : p.userNo));
+  const held = new Map<string, number>();
+  for (const group of chunk(sideAtas, 100)) {
+    const infos = await connection.getMultipleAccountsInfo(group, "confirmed");
+    infos.forEach((info, i) => {
+      const key = group[i]!.toBase58();
+      held.set(key, info && info.data.length >= 72 ? Number(info.data.readBigUInt64LE(64)) : 0);
+    });
+  }
 
-      const tx = new Transaction();
-      tx.add(
-        createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
-        createAssociatedTokenAccountIdempotentInstruction(user, userYes, user, yesMint),
-        createAssociatedTokenAccountIdempotentInstruction(user, userNo, user, noMint),
-      );
-
-      const sideEnum = m.side === "yes" ? { yes: {} } : { no: {} };
-      const redeemIx = await (program.methods as any)
-        .redeem(sideEnum, new BN(amount))
-        .accounts({
-          market,
-          yesMint,
-          noMint,
-          usdcMint,
-          vault,
-          userUsdc,
-          userYes,
-          userNo,
-          user,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .instruction();
-      tx.add(redeemIx);
-
-      lastSig = await provider.sendAndConfirm(tx);
-      redeemedCount++;
-      // Winning side pays $1.00 (100¢) per token actually redeemed.
-      paidCents += m.payoutCents > 0 ? amount * 100 : 0;
+  // Build the txs we actually need (amount clamped to live balance; 0 → skip).
+  const sends: { m: (typeof args.markets)[number]; tx: Transaction; amount: number }[] = [];
+  for (const p of plans) {
+    const { m } = p;
+    const sideAta = m.side === "yes" ? p.userYes : p.userNo;
+    const amount = planRedeemAmount(m.quantity, held.get(sideAta.toBase58()) ?? 0);
+    if (amount <= 0) {
+      skippedCount++;
       logTradeAction({
-        action: "redeem",
-        ticker: m.ticker,
-        strike: m.strike,
-        side: m.side,
-        qty: amount,
-        priceCents: m.payoutCents > 0 ? 100 : 0,
-        feeCents: 0,
-        txSig: lastSig,
-        status: "confirmed",
+        action: "redeem", ticker: m.ticker, strike: m.strike, side: m.side,
+        qty: 0, priceCents: null, feeCents: 0, txSig: null, status: "failed",
+        error: "nothing to redeem (no balance — already redeemed?)",
       });
-    } catch (err) {
-      logTradeAction({
-        action: "redeem",
-        ticker: m.ticker,
-        strike: m.strike,
-        side: m.side,
-        qty: m.quantity,
-        priceCents: null,
-        feeCents: 0,
-        txSig: null,
-        status: "failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
+      continue;
     }
+    const tx = new Transaction();
+    tx.add(
+      createAssociatedTokenAccountIdempotentInstruction(user, userUsdc, user, usdcMint),
+      createAssociatedTokenAccountIdempotentInstruction(user, p.userYes, user, p.yesMint),
+      createAssociatedTokenAccountIdempotentInstruction(user, p.userNo, user, p.noMint),
+    );
+    const sideEnum = m.side === "yes" ? { yes: {} } : { no: {} };
+    const redeemIx = await (program.methods as any)
+      .redeem(sideEnum, new BN(amount))
+      .accounts({
+        market: p.market, yesMint: p.yesMint, noMint: p.noMint, usdcMint,
+        vault: p.vault, userUsdc, userYes: p.userYes, userNo: p.userNo,
+        user, tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .instruction();
+    tx.add(redeemIx);
+    sends.push({ m, tx, amount });
+  }
+
+  // Send in PARALLEL (capped concurrency) so N single-market redeems confirm
+  // concurrently instead of one-after-another — the "redeem all is slow" fix.
+  // One failing tx must NOT abort the rest (Promise.allSettled).
+  const REDEEM_CONCURRENCY = 6;
+  for (const batch of chunk(sends, REDEEM_CONCURRENCY)) {
+    const results = await Promise.allSettled(
+      batch.map((s) => provider.sendAndConfirm(s.tx)),
+    );
+    results.forEach((r, i) => {
+      const { m, amount } = batch[i]!;
+      if (r.status === "fulfilled") {
+        redeemedCount++;
+        lastSig = r.value;
+        paidCents += m.payoutCents > 0 ? amount * 100 : 0;
+        logTradeAction({
+          action: "redeem", ticker: m.ticker, strike: m.strike, side: m.side,
+          qty: amount, priceCents: m.payoutCents > 0 ? 100 : 0, feeCents: 0,
+          txSig: r.value, status: "confirmed",
+        });
+      } else {
+        failedCount++;
+        logTradeAction({
+          action: "redeem", ticker: m.ticker, strike: m.strike, side: m.side,
+          qty: m.quantity, priceCents: null, feeCents: 0, txSig: null,
+          status: "failed",
+          error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        });
+      }
+    });
   }
 
   return {
@@ -1453,6 +1455,7 @@ export async function buildAndSendRedeem(
     totalPayoutCents: paidCents,
     redeemedCount,
     skippedCount,
+    failedCount,
   };
 }
 

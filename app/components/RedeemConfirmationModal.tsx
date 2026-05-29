@@ -48,15 +48,20 @@ export function RedeemConfirmationModal({ positions, onClose, onComplete }: Prop
           payoutCents: p.market.outcome === p.side ? p.quantity * 100 : 0,
         })),
       });
-      if (res.redeemedCount === 0) {
-        // Every position had a zero on-chain balance (already redeemed / moved).
-        notify.info("Nothing to redeem — these tokens are no longer in your wallet (already redeemed?).");
-      } else {
+      if (res.redeemedCount > 0) {
         notify.success(
           `Redeemed ${res.redeemedCount} position${res.redeemedCount === 1 ? "" : "s"} for ${fmtUsdDollars(res.totalPayoutCents / 100)}` +
             (res.skippedCount > 0 ? ` · ${res.skippedCount} skipped (no balance)` : ""),
         );
         if (res.signature) notify.info(`Tx: ${res.signature.slice(0, 16)}…`);
+      }
+      if (res.failedCount > 0) {
+        notify.error(
+          `${res.failedCount} redeem${res.failedCount === 1 ? "" : "s"} failed — see History; the list has been refreshed.`,
+        );
+      } else if (res.redeemedCount === 0) {
+        // Every position had a zero on-chain balance (already redeemed / moved).
+        notify.info("Nothing to redeem — these tokens are no longer in your wallet (already redeemed?).");
       }
       // Always refresh + close so a stale row can't be re-clicked into the same
       // error — this is what makes the failure "go away" instead of sticking.
