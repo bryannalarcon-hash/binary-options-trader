@@ -48,15 +48,25 @@ export function RedeemConfirmationModal({ positions, onClose, onComplete }: Prop
           payoutCents: p.market.outcome === p.side ? p.quantity * 100 : 0,
         })),
       });
-      notify.success(
-        `Redeemed ${positions.length} position${positions.length === 1 ? "" : "s"} for ${fmtUsdDollars(res.totalPayoutCents / 100)}`,
-      );
-      notify.info(`Tx: ${res.signature.slice(0, 16)}…`);
+      if (res.redeemedCount === 0) {
+        // Every position had a zero on-chain balance (already redeemed / moved).
+        notify.info("Nothing to redeem — these tokens are no longer in your wallet (already redeemed?).");
+      } else {
+        notify.success(
+          `Redeemed ${res.redeemedCount} position${res.redeemedCount === 1 ? "" : "s"} for ${fmtUsdDollars(res.totalPayoutCents / 100)}` +
+            (res.skippedCount > 0 ? ` · ${res.skippedCount} skipped (no balance)` : ""),
+        );
+        if (res.signature) notify.info(`Tx: ${res.signature.slice(0, 16)}…`);
+      }
+      // Always refresh + close so a stale row can't be re-clicked into the same
+      // error — this is what makes the failure "go away" instead of sticking.
       onComplete();
     } catch (err) {
       notify.error(
         `Redeem failed: ${err instanceof Error ? err.message : "unknown"}`,
       );
+      // Refresh underlying positions even on failure so the list reflects reality.
+      onComplete();
     } finally {
       setBusy(false);
     }
@@ -65,6 +75,11 @@ export function RedeemConfirmationModal({ positions, onClose, onComplete }: Prop
   return (
     <ModalShell title="Redeem settled positions" onClose={onClose}>
       <div className="space-y-3 text-sm">
+        <p className="text-xs text-zinc-500">
+          Only the <span className="text-zinc-300">winning side</span> of a{" "}
+          <span className="text-zinc-300">settled</span> market redeems for $1.00
+          per token. Losing or not-yet-settled tokens aren&apos;t redeemable.
+        </p>
         {positions.length === 0 ? (
           <p className="text-zinc-400">No settled positions to redeem.</p>
         ) : (

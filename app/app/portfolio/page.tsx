@@ -108,6 +108,12 @@ export default function PortfolioPage() {
   const otmCount = markedCount - itmCount;
   const winRate = markedCount === 0 ? 0 : Math.round((itmCount / markedCount) * 100);
 
+  // Redeemable = the WINNING side of a settled market (pays $1.00/token). This
+  // is the single source for both the aggregate "Redeem all winnings" action and
+  // the per-row Redeem buttons, so they never disagree about what's claimable.
+  const redeemable = settled.filter((p) => p.market.outcome === p.side);
+  const redeemableTokens = redeemable.reduce((s, p) => s + p.quantity, 0);
+
   return (
     <div className="page">
       <div
@@ -134,16 +140,9 @@ export default function PortfolioPage() {
           >
             Refresh
           </Button>
-          {settled.filter((p) => p.market.outcome === p.side).length > 0 && (
-            <Button
-              primary
-              onClick={() =>
-                setRedeemTarget(
-                  settled.filter((p) => p.market.outcome === p.side),
-                )
-              }
-            >
-              Redeem All
+          {redeemable.length > 0 && (
+            <Button primary onClick={() => setRedeemTarget(redeemable)}>
+              Redeem {redeemableTokens} winning token{redeemableTokens === 1 ? "" : "s"} · {fmt$(redeemableTokens)}
             </Button>
           )}
         </div>
@@ -296,9 +295,29 @@ export default function PortfolioPage() {
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
         <Card padding={0}>
           <div
-            style={{ padding: "14px 18px", borderBottom: "1px solid var(--line-soft)" }}
+            style={{
+              padding: "14px 18px",
+              borderBottom: "1px solid var(--line-soft)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
           >
-            <h3>Settled (last 30 days)</h3>
+            <div>
+              <h3>Settled (last 30 days)</h3>
+              <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>
+                {redeemable.length > 0
+                  ? `${redeemableTokens} winning token${redeemableTokens === 1 ? "" : "s"} redeemable for $1.00 each`
+                  : "Winning tokens redeem for $1.00 each"}
+              </div>
+            </div>
+            {redeemable.length > 0 && (
+              <Button sm primary onClick={() => setRedeemTarget(redeemable)}>
+                Redeem all winnings · {fmt$(redeemableTokens)}
+              </Button>
+            )}
           </div>
           {settled.length === 0 ? (
             <div
