@@ -106,8 +106,9 @@ MERIDIAN_RUN_HARNESS_SUITES=1 ./scripts/run-anchor-tests.sh edge
 | Edge-cases (math-only)     | `tests/anchor/edge-cases.test.ts` | **3** | 16 | 0 |
 | Integration (math-only + T-IT-06) | `tests/anchor/integration.test.ts` | **2** | 7 | 0 |
 | Automation regression (`node:test`) | `automation/src/lib/anchor.test.ts` | **2** | 0 | 0 |
+| Morning price/seed regression (`node:test`) | `automation/src/lib/morning-price.test.ts` | **4** | 0 | 0 |
 | Frontend logic regression (`mocha`) | `tests/unit/*.test.ts` | **21** | 0 | 0 |
-| **Total (green run)**      | — | **67** | 23 | **0** |
+| **Total (green run)**      | — | **71** | 23 | **0** |
 
 - The 39 core tests cover every one of the 16 program instructions, plus all
   PRD-listed edge/error paths (zero amount, out-of-range price, paused, stale
@@ -126,6 +127,15 @@ MERIDIAN_RUN_HARNESS_SUITES=1 ./scripts/run-anchor-tests.sh edge
   per signer (no per-pass WS); test 2 asserts a global `unhandledRejection`
   handler is installed so a stray 429 logs instead of exiting. Offline (no
   network/validator) — constructs Anchor objects only.
+- **Morning price/seed regression (`automation/src/lib/morning-price.test.ts`,
+  run `cd automation && pnpm test`).** Guards the 2026-05-28/29 outage: Pyth
+  Hermes returned HTTP 503, the morning job got no previous-close price, skipped
+  every ticker, created ZERO markets — yet reported the run "ok". Tests assert
+  (1) the on-chain oracle is converted to USD via its `expo`, (2)
+  `resolvePreviousCloseUsd` falls back to the oracle when Hermes is missing (and
+  returns null only when neither is usable — which now fails the run + alerts),
+  and (3) the MM-seed pricing (`fairMidCents`/`quote`) is monotonic and clamped
+  to a legal `1 <= bid < ask <= 99`. Offline (pure functions).
 - **Frontend logic regression (`tests/unit/*.test.ts`, run `pnpm --filter tests
   test:unit`).** 21 offline mocha specs guarding the 2026-05-28 batch:
   (a) `admin-key-gate` — the "Admin (demo)" wallet must SERVE on localnet+devnet

@@ -4,7 +4,7 @@ import {
   TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 
 import { isNyseTradingDay } from "../calendar";
 import { env } from "../env";
@@ -12,6 +12,7 @@ import { sendAlert } from "../lib/alerts";
 import { buildAnchorContext, getAnchorContext, isProgramDeployed } from "../lib/anchor";
 import { todayExpiryTsSeconds } from "../lib/expiry";
 import { fetchMag7Prices } from "../lib/hermes";
+import { oraclePriceToUsd, resolvePreviousCloseUsd } from "../lib/morning-price";
 import {
   configPda,
   marketPda,
@@ -21,9 +22,15 @@ import {
   yesMintPda,
 } from "../lib/pdas";
 import { retry } from "../lib/retry";
+import { seedMarketBook } from "../lib/seed";
 import { computeStrikes } from "../lib/strikes";
 import { MAG7_TICKERS } from "../lib/tickers";
+import { sendHttp } from "../lib/tx";
 import { ctx } from "../logger";
+
+/** MM book seeding defaults (size = tokens per side, spread = bid/ask gap in ¢). */
+const SEED_SIZE = 100;
+const SEED_SPREAD_CENTS = 6;
 
 const log = ctx("morning");
 
@@ -46,8 +53,10 @@ function yesEscrowPda(programId: PublicKey, market: PublicKey): [PublicKey, numb
 export interface MorningResult {
   ticker: string;
   previousCloseCents: number | null;
+  priceSource: "hermes" | "oracle" | "none";
   strikesAttempted: number[];
   strikesCreated: number[];
+  strikesSeeded: number[];
   marketPubkeys: string[];
   errors: Array<{ strike: number; reason: string }>;
   skipped: boolean;
@@ -58,15 +67,21 @@ export interface MorningResult {
  * Morning job (~8:00 AM ET).
  *
  * For each MAG7 ticker:
- *   1. Read previous close (Hermes for now — TODO: read oracle PDA on-chain).
+ *   1. Resolve previous close: prefer Pyth Hermes, fall back to the on-chain
+ *      oracle when Hermes is unavailable (so a Hermes outage can't silently
+ *      create zero markets — the 2026-05-28/29 failure).
  *   2. Compute strike grid (±3/6/9%, $10 rounded, dedup).
- *   3. For each strike, bundle `create_strike_market` + `init_market_books`
- *      into a single transaction (the smart contract requires them paired
- *      because `init_market_books` initializes the orderbook + bid/ask
- *      escrows that the rest of the contract assumes to exist).
+ *   3. For each missing strike, create `create_strike_market` + `init_market_books`
+ *      then seed a two-sided MM book — so markets are never an empty `0/100`.
  *
- * Idempotent — if the market PDA already exists the Anchor `init` constraint
- * fails with "already in use" / 0x0 and we log + skip.
+ * Idempotent — markets that already exist for today's expiry are skipped (both
+ * create and seed), so a re-run never double-seeds. Uses the ADMIN keypair: it
+ * holds the USDC needed to seed and is already loaded for the oracle job. All
+ * writes confirm via HTTP polling ({@link sendHttp}) to dodge the throttled WS
+ * confirmation path.
+ *
+ * Health: if the run ends with ZERO markets for today's expiry, it THROWS so
+ * the job is recorded as failed (not a silent "ok") and an alert fires.
  */
 export async function runMorningJob(): Promise<MorningResult[]> {
   if (!env.skipCalendarCheck && !isNyseTradingDay()) {
@@ -76,7 +91,8 @@ export async function runMorningJob(): Promise<MorningResult[]> {
 
   let anchor;
   try {
-    anchor = getAnchorContext(env.automationKeypairPath);
+    // Admin context: holds USDC for seeding + is already used by the oracle job.
+    anchor = getAnchorContext(env.adminKeypairPath);
   } catch (err) {
     log.warn(
       { err: errMsg(err) },
@@ -99,11 +115,9 @@ export async function runMorningJob(): Promise<MorningResult[]> {
     return [];
   }
 
-  // Fetch previous closes off-chain for now. The on-chain oracle account holds
-  // the latest pushed price; we could also read that — but Hermes is the source
-  // of truth for "what was the close 16 hours ago" before settlement runs.
+  // Previous close: Hermes first (freshest "16h-ago close"), oracle as fallback.
   const priceMap = await fetchMag7Prices(env.pythFeeds).catch((err) => {
-    log.warn({ err: errMsg(err) }, "hermes fetch failed");
+    log.warn({ err: errMsg(err) }, "hermes fetch failed — will fall back to on-chain oracle");
     return new Map();
   });
 
@@ -113,20 +127,53 @@ export async function runMorningJob(): Promise<MorningResult[]> {
     "computed expiry timestamp",
   );
 
+  // Fee destination (place_order routes the taker fee here) + the set of markets
+  // that already exist for today's expiry, so we skip create+seed for those.
+  const [configPk] = configPda(anchor.programId);
+  const cfg: any = await (anchor.program.account as any).config.fetch(configPk);
+  const feeDestination: PublicKey = cfg.feeDestination;
+
+  const existing = new Set<string>();
+  try {
+    const all: Array<{ account: any }> = await (anchor.program.account as any).market.all();
+    for (const m of all) {
+      if (Number(m.account.expiryTs) === expiryTs) {
+        existing.add(`${m.account.ticker}:${Number(m.account.strike)}`);
+      }
+    }
+  } catch (err) {
+    log.warn({ err: errMsg(err) }, "could not prefetch existing markets — proceeding (creates may no-op)");
+  }
+
   const results: MorningResult[] = [];
   for (const ticker of MAG7_TICKERS) {
+    const hermesUsd = priceMap.get(ticker)?.priceUsd ?? null;
+    const oracleUsd = await readOracleUsd(anchor, ticker);
+    const previousClose = resolvePreviousCloseUsd(hermesUsd, oracleUsd);
+    const priceSource: MorningResult["priceSource"] =
+      hermesUsd != null && previousClose === hermesUsd
+        ? "hermes"
+        : previousClose != null
+          ? "oracle"
+          : "none";
+
     const result = await runMorningForTicker(
       anchor,
       ticker,
-      priceMap.get(ticker)?.priceUsd ?? null,
+      previousClose,
+      priceSource,
       expiryTs,
+      existing,
+      feeDestination,
     );
     results.push(result);
     log.info(
       {
         ticker: result.ticker,
+        price_source: result.priceSource,
         strikes_attempted: result.strikesAttempted,
         strikes_created: result.strikesCreated,
+        strikes_seeded: result.strikesSeeded,
         market_pubkeys: result.marketPubkeys,
         errors: result.errors,
       },
@@ -134,25 +181,58 @@ export async function runMorningJob(): Promise<MorningResult[]> {
     );
   }
 
+  // Honest health: a run that leaves ZERO markets for today's expiry is a
+  // failure, not a silent success (the 2026-05-28/29 Hermes-outage bug).
+  const created = results.reduce((n, r) => n + r.strikesCreated.length, 0);
+  const totalMarkets = existing.size + created;
+  if (totalMarkets === 0) {
+    await sendAlert({
+      severity: "error",
+      source: "morning",
+      message: "morning run produced ZERO markets for today's expiry",
+      details: { expiryTs, tickers: MAG7_TICKERS.length },
+    });
+    throw new Error("morning job created/found 0 markets — no price source available for any ticker");
+  }
+
   return results;
+}
+
+/** Read the on-chain oracle price (USD) for a ticker, or null if unavailable. */
+async function readOracleUsd(
+  anchor: ReturnType<typeof buildAnchorContext>,
+  ticker: string,
+): Promise<number | null> {
+  try {
+    const [oracle] = oraclePda(anchor.programId, ticker);
+    const acc: any = await (anchor.program.account as any).oracleAccount.fetch(oracle);
+    return oraclePriceToUsd(Number(acc.price), Number(acc.expo));
+  } catch {
+    return null;
+  }
 }
 
 async function runMorningForTicker(
   anchor: ReturnType<typeof buildAnchorContext>,
   ticker: string,
   previousClose: number | null,
+  priceSource: MorningResult["priceSource"],
   expiryTs: number,
+  existing: Set<string>,
+  feeDestination: PublicKey,
 ): Promise<MorningResult> {
   if (previousClose === null || previousClose <= 0) {
     return {
       ticker,
       previousCloseCents: null,
+      priceSource: "none",
       strikesAttempted: [],
       strikesCreated: [],
+      strikesSeeded: [],
       marketPubkeys: [],
       errors: [],
       skipped: true,
-      skipReason: "no previous close available",
+      skipReason: "no previous close available (Hermes + oracle both unavailable)",
     };
   }
 
@@ -162,29 +242,40 @@ async function runMorningForTicker(
   const result: MorningResult = {
     ticker,
     previousCloseCents,
+    priceSource,
     strikesAttempted: strikes,
     strikesCreated: [],
+    strikesSeeded: [],
     marketPubkeys: [],
     errors: [],
     skipped: false,
   };
 
-  const { program, programId, provider, wallet } = anchor;
+  const { program, programId, connection } = anchor;
+  const payer: Keypair = (anchor.wallet as any).payer;
   const [config] = configPda(programId);
   const usdcMint = usdcMintPubkey();
+  const spotUsd = previousClose;
 
   for (const strike of strikes) {
     const [market] = marketPda(programId, ticker, strike, expiryTs);
     const [yesMint] = yesMintPda(programId, market);
     const [noMint] = noMintPda(programId, market);
+
+    // Idempotent: a market that already exists for this expiry was created AND
+    // seeded in a prior run — skip both to avoid double-seeding the book.
+    if (existing.has(`${ticker}:${strike}`)) {
+      result.marketPubkeys.push(market.toBase58());
+      continue;
+    }
+
     const [oracle] = oraclePda(programId, ticker);
     const [orderbook] = orderbookPda(programId, market);
     const [usdcEscrow] = usdcEscrowPda(programId, market);
     const [yesEscrow] = yesEscrowPda(programId, market);
-
-    // Vault is the ATA of usdc_mint owned by the market PDA (off-curve).
     const vault = getAssociatedTokenAddressSync(usdcMint, market, true);
 
+    // 1. Create market + init books (one tx), confirmed via HTTP polling.
     try {
       await retry(
         async () => {
@@ -198,13 +289,12 @@ async function runMorningForTicker(
               usdcMint,
               vault,
               oracle,
-              payer: wallet.publicKey,
+              payer: payer.publicKey,
               tokenProgram: TOKEN_PROGRAM_ID,
               associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
             })
             .instruction();
-
           const initIx = await (program.methods as any)
             .initMarketBooks()
             .accounts({
@@ -214,14 +304,12 @@ async function runMorningForTicker(
               orderbook,
               usdcEscrow,
               yesEscrow,
-              payer: wallet.publicKey,
+              payer: payer.publicKey,
               tokenProgram: TOKEN_PROGRAM_ID,
               systemProgram: SystemProgram.programId,
             })
             .instruction();
-
-          const tx = new Transaction().add(createIx, initIx);
-          await provider.sendAndConfirm(tx);
+          await sendHttp(connection, payer, [createIx, initIx]);
         },
         {
           attempts: 3,
@@ -239,24 +327,43 @@ async function runMorningForTicker(
       result.marketPubkeys.push(market.toBase58());
     } catch (err) {
       if (isAlreadyExistsError(err)) {
-        log.info(
-          { ticker, strike, market: market.toBase58() },
-          "market already exists — skipping (idempotent)",
-        );
+        log.info({ ticker, strike, market: market.toBase58() }, "market already exists — skipping create");
         result.marketPubkeys.push(market.toBase58());
-      } else {
-        result.errors.push({ strike, reason: errMsg(err) });
-        log.error(
-          { ticker, strike, err: errMsg(err) },
-          "create_strike_market failed after retries",
-        );
-        await sendAlert({
-          severity: "error",
-          source: "morning",
-          message: `create_strike_market failed for ${ticker} @ ${strike}`,
-          details: { ticker, strike, error: errMsg(err) },
-        });
+        continue; // already existed (and presumably seeded) — don't re-seed
       }
+      result.errors.push({ strike, reason: errMsg(err) });
+      log.error({ ticker, strike, err: errMsg(err) }, "create_strike_market failed after retries");
+      await sendAlert({
+        severity: "error",
+        source: "morning",
+        message: `create_strike_market failed for ${ticker} @ ${strike}`,
+        details: { ticker, strike, error: errMsg(err) },
+      });
+      continue; // can't seed a market that wasn't created
+    }
+
+    // 2. Seed a two-sided MM book — best-effort: a seed failure must NOT undo a
+    // successfully created market (it just shows an estimated price until seeded).
+    try {
+      const { bid, ask } = await seedMarketBook({
+        program,
+        connection,
+        payer,
+        programId,
+        market,
+        yesMint,
+        noMint,
+        usdcMint,
+        feeDestination,
+        spotUsd,
+        strikeCents: strike,
+        size: SEED_SIZE,
+        spreadCents: SEED_SPREAD_CENTS,
+      });
+      result.strikesSeeded.push(strike);
+      log.info({ ticker, strike, bid, ask }, "seeded MM book");
+    } catch (err) {
+      log.warn({ ticker, strike, err: errMsg(err) }, "MM seed failed (market created, left unseeded)");
     }
   }
 

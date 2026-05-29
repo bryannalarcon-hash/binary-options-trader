@@ -10,7 +10,7 @@
     "morning": "tsx src/jobs/morning.ts",
     "settle": "tsx src/jobs/settle.ts",
     "oracle-update": "tsx src/jobs/update-oracle.ts",
-    "test": "tsx --test src/lib/anchor.test.ts",
+    "test": "tsx --test src/lib/*.test.ts",
     "clean": "rm -rf dist tsconfig.tsbuildinfo"
   },
   "dependencies": {
