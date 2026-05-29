@@ -15,6 +15,19 @@ import { AdminWalletAdapter } from "@/lib/admin-wallet";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
+// Silence the benign "ws error: …" noise @solana/web3.js logs when its RPC
+// WebSocket hiccups under devnet throttling. Our data hooks (markets/spot/book)
+// all fall back to polling on a WS drop, so this is console noise, not a real
+// failure — and only this exact prefix is filtered; every other error passes.
+if (typeof window !== "undefined" && !(window as { __wsErrPatched?: boolean }).__wsErrPatched) {
+  (window as { __wsErrPatched?: boolean }).__wsErrPatched = true;
+  const origError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    if (typeof args[0] === "string" && args[0].startsWith("ws error")) return;
+    origError(...args);
+  };
+}
+
 /**
  * Wraps the app with Solana wallet connection + modal providers.
  *
