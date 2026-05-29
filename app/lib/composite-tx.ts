@@ -54,6 +54,7 @@ import type { WalletContextState } from "@solana/wallet-adapter-react";
 
 import type { Side } from "@meridian/types";
 import { env } from "./env";
+import { planRedeemAmount } from "./redeem-plan";
 import idl from "./meridian-idl.json";
 import type { Ticker } from "./tickers";
 import { logTradeAction } from "./trade-log";
@@ -89,6 +90,10 @@ export interface BuildRedeemArgs {
 export interface RedeemResult {
   signature: string;
   totalPayoutCents: number;
+  /** How many positions actually had a balance and were redeemed on-chain. */
+  redeemedCount: number;
+  /** How many were skipped (no on-chain balance — e.g. already redeemed). */
+  skippedCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1328,28 +1333,63 @@ export async function buildAndSendRedeem(
       `redeem-${args.markets.map((m) => m.ticker).join(",")}`,
     );
     const totalPayoutCents = args.markets.reduce((a, m) => a + m.payoutCents, 0);
-    return { signature: sig, totalPayoutCents };
+    return {
+      signature: sig,
+      totalPayoutCents,
+      redeemedCount: args.markets.length,
+      skippedCount: 0,
+    };
   }
   const { program, programId, provider } = built;
 
   const usdcMint = new PublicKey(env.usdcMint);
   let lastSig = "";
+  let redeemedCount = 0;
+  let skippedCount = 0;
+  let paidCents = 0;
 
   for (const m of args.markets) {
     try {
-      const found = await findMarketExpiry(program, programId, m.ticker, m.strike);
-      if (!found) {
-        throw new Error(
-          `Market ${m.ticker} @ $${(m.strike / 100).toFixed(2)} not found on-chain`,
-        );
-      }
-      const market = found.market;
+      // Redeem the EXACT market PDA carried by the position — NOT a
+      // (ticker, strike) re-resolution. The same strike can have settled markets
+      // across multiple expiry days; resolving by (ticker, strike) picked the
+      // wrong expiry's market (wrong mints) and reverted NotEnoughBalance (0x177e).
+      const market = new PublicKey(m.address);
       const yesMint = yesMintPda(programId, market);
       const noMint = noMintPda(programId, market);
       const vault = getAssociatedTokenAddressSync(usdcMint, market, true);
       const userUsdc = getAssociatedTokenAddressSync(usdcMint, user);
       const userYes = getAssociatedTokenAddressSync(yesMint, user);
       const userNo = getAssociatedTokenAddressSync(noMint, user);
+
+      // Clamp to the LIVE on-chain balance so a stale cached quantity can never
+      // over-ask (the other source of NotEnoughBalance). 0 → skip, don't send a
+      // doomed tx (e.g. the side was already redeemed).
+      const sideAta = m.side === "yes" ? userYes : userNo;
+      let held = 0;
+      try {
+        const bal = await connection.getTokenAccountBalance(sideAta, "confirmed");
+        held = Number(bal.value.amount);
+      } catch {
+        held = 0; // ATA missing → nothing to redeem
+      }
+      const amount = planRedeemAmount(m.quantity, held);
+      if (amount <= 0) {
+        logTradeAction({
+          action: "redeem",
+          ticker: m.ticker,
+          strike: m.strike,
+          side: m.side,
+          qty: 0,
+          priceCents: null,
+          feeCents: 0,
+          txSig: null,
+          status: "failed",
+          error: "nothing to redeem (no balance — already redeemed?)",
+        });
+        skippedCount++;
+        continue;
+      }
 
       const tx = new Transaction();
       tx.add(
@@ -1360,7 +1400,7 @@ export async function buildAndSendRedeem(
 
       const sideEnum = m.side === "yes" ? { yes: {} } : { no: {} };
       const redeemIx = await (program.methods as any)
-        .redeem(sideEnum, new BN(m.quantity))
+        .redeem(sideEnum, new BN(amount))
         .accounts({
           market,
           yesMint,
@@ -1377,13 +1417,16 @@ export async function buildAndSendRedeem(
       tx.add(redeemIx);
 
       lastSig = await provider.sendAndConfirm(tx);
+      redeemedCount++;
+      // Winning side pays $1.00 (100¢) per token actually redeemed.
+      paidCents += m.payoutCents > 0 ? amount * 100 : 0;
       logTradeAction({
         action: "redeem",
         ticker: m.ticker,
         strike: m.strike,
         side: m.side,
-        qty: m.quantity,
-        priceCents: m.quantity > 0 ? Math.round(m.payoutCents / m.quantity) : null,
+        qty: amount,
+        priceCents: m.payoutCents > 0 ? 100 : 0,
         feeCents: 0,
         txSig: lastSig,
         status: "confirmed",
@@ -1405,8 +1448,12 @@ export async function buildAndSendRedeem(
     }
   }
 
-  const totalPayoutCents = args.markets.reduce((a, m) => a + m.payoutCents, 0);
-  return { signature: lastSig, totalPayoutCents };
+  return {
+    signature: lastSig,
+    totalPayoutCents: paidCents,
+    redeemedCount,
+    skippedCount,
+  };
 }
 
 // Re-export of unused symbols to silence "unused" lints in callers.
