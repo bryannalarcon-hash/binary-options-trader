@@ -123,13 +123,19 @@ export function TradePageClient({ ticker, strike }: Props) {
   // so they disagreed with the chain. Prefer the real book mid, else fall back to
   // the same estimate the chain shows, so all three panels match.
   const strikeRow = strikeList.find((s) => s.strike === strike) ?? null;
-  const yesDisplay = yesMid ?? strikeRow?.yesCents ?? null;
+  // A SETTLED market resolves to a deterministic $1/$0: the winning side is 100¢,
+  // the other 0¢. Show that — NOT a stale resting book-mid (which read e.g. 36¢ on
+  // a market where NO already won). Resolved prices are real, not an estimate.
+  const settledYesCents =
+    market?.settled && market.outcome ? (market.outcome === "yes" ? 100 : 0) : null;
+  const yesDisplay = settledYesCents ?? yesMid ?? strikeRow?.yesCents ?? null;
   const noDisplay = yesDisplay != null ? 100 - yesDisplay : null;
   // The price is an ESTIMATE (not an executable quote) whenever there is no
   // two-sided book mid — i.e. the displayed number comes from the oracle-vs-strike
   // proxy in the strike chain, not from resting bids/asks. The UI must mark it so
-  // a user doesn't read "62¢" as "I can buy here right now".
-  const priceEstimated = yesDisplay != null && yesMid == null;
+  // a user doesn't read "62¢" as "I can buy here right now". A resolved settled
+  // price is exact, never an estimate.
+  const priceEstimated = settledYesCents == null && yesDisplay != null && yesMid == null;
 
   const inMoney = spotDollars != null ? spotDollars >= strikeDollars : null;
   const distPct =
