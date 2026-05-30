@@ -171,22 +171,8 @@ export function TradePageClient({ ticker, strike }: Props) {
 
   return (
     <div className="page" style={{ paddingTop: 24 }}>
-      {/* HEADER STRIP */}
-      <TradeHeader
-        ticker={ticker}
-        strikeDollars={strikeDollars}
-        spotDollars={spotDollars}
-        spotLoading={spotLoading}
-        yes={yesDisplay}
-        no={noDisplay}
-        estimated={priceEstimated}
-        inMoney={inMoney}
-        distPct={distPct}
-        vol24={vol24}
-        spread={spread}
-        settlesIn={settlesIn}
-      />
-
+      {/* Settled markets stay read-only: the resolved banner sits above the
+          bet so it's the first thing a holder sees. */}
       {isSettled && (
         <ResolvedBanner
           ticker={ticker}
@@ -197,152 +183,350 @@ export function TradePageClient({ ticker, strike }: Props) {
         />
       )}
 
+      {/* ───────────────────────── BET (hero, default) ─────────────────────────
+          The actual job: a plain-language question + the order-entry panel,
+          centered with generous spacing. TradePanel is unchanged — it already
+          owns the side cards, qty input, payoff sentence, CTA, and every
+          settled / estimated / closed-session state. */}
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "260px minmax(0, 1fr) 340px",
-          gap: 16,
-          marginTop: 16,
+          maxWidth: 520,
+          margin: "0 auto",
+          marginTop: isSettled ? 24 : 8,
+        }}
+        className="stack"
+      >
+        <BetHeadline
+          ticker={ticker}
+          strikeDollars={strikeDollars}
+          settlesIn={settlesIn}
+        />
+
+        <TradePanel
+          ticker={ticker}
+          strikeCents={strike}
+          strikeDollars={strikeDollars}
+          yes={yesDisplay}
+          no={noDisplay}
+          estimated={priceEstimated}
+          book={book}
+          holding={holding}
+          settled={isSettled}
+          outcome={settledOutcome}
+        />
+
+        {/* Resting (unfilled) orders for THIS market, with Cancel. Renders
+            nothing when there are none. yes/no may be null on an empty book —
+            TradePanel handles it. */}
+        <OpenOrdersForMarket market={market} />
+      </div>
+
+      {/* ───────────────────────── ADVANCED (collapsed) ──────────────────────
+          All the pro furniture — quant header, charts, order book, depth,
+          recent-trades tape, scenario simulator, and the contract / strike-chain
+          rail — moves behind a disclosure, default closed. Logic unchanged. */}
+      <AdvancedSection
+        ticker={ticker}
+        strike={strike}
+        strikeDollars={strikeDollars}
+        spotDollars={spotDollars}
+        spotLoading={spotLoading}
+        yesDisplay={yesDisplay}
+        noDisplay={noDisplay}
+        priceEstimated={priceEstimated}
+        inMoney={inMoney}
+        distPct={distPct}
+        vol24={vol24}
+        spread={spread}
+        settlesIn={settlesIn}
+        book={book}
+        bookLoading={bookLoading}
+        trades={trades}
+        strikeList={strikeList}
+        strikeLoading={strikeLoading}
+        holding={holding}
+        mounted={mounted}
+        tradeView={tradeView}
+        setTradeView={setTradeView}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bet headline — plain-language question that fronts the hero.
+// ---------------------------------------------------------------------------
+function BetHeadline({
+  ticker,
+  strikeDollars,
+  settlesIn,
+}: {
+  ticker: Ticker;
+  strikeDollars: number;
+  settlesIn: string;
+}) {
+  return (
+    <div style={{ textAlign: "center", padding: "8px 0 4px" }}>
+      <div
+        style={{
+          fontSize: 24,
+          fontWeight: 600,
+          letterSpacing: "-0.02em",
+          color: "var(--text)",
+          lineHeight: 1.25,
         }}
       >
-        {/* LEFT RAIL */}
-        <div className="stack">
-          <StrikeChain
+        Will {ticker} close at or above ${strikeDollars.toFixed(2)} today?
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 8 }}>
+        {TICKER_NAME[ticker]} · settles today 4:00 PM ET
+        {settlesIn !== "—" && (
+          <>
+            {" · "}
+            <span className="num" style={{ color: "var(--text-2)" }}>
+              {settlesIn}
+            </span>{" "}
+            left
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Advanced disclosure — collapsed by default. Holds the quant header, the four
+// chart tabs, the order book / depth ladder, the recent-trades tape, the
+// scenario simulator, and the contract / strike-chain rail. Every child keeps
+// its original logic verbatim; it's simply not mounted-visible until expanded.
+//
+// Uses a useState boolean (not <details>) so the toggle is reduced-motion-safe:
+// content is conditionally rendered with no transition that could fight a
+// user's prefers-reduced-motion setting.
+// ---------------------------------------------------------------------------
+function AdvancedSection({
+  ticker,
+  strike,
+  strikeDollars,
+  spotDollars,
+  spotLoading,
+  yesDisplay,
+  noDisplay,
+  priceEstimated,
+  inMoney,
+  distPct,
+  vol24,
+  spread,
+  settlesIn,
+  book,
+  bookLoading,
+  trades,
+  strikeList,
+  strikeLoading,
+  holding,
+  mounted,
+  tradeView,
+  setTradeView,
+}: {
+  ticker: Ticker;
+  strike: number;
+  strikeDollars: number;
+  spotDollars: number | null;
+  spotLoading: boolean;
+  yesDisplay: number | null;
+  noDisplay: number | null;
+  priceEstimated: boolean;
+  inMoney: boolean | null;
+  distPct: number | null;
+  vol24: number;
+  spread: number | null;
+  settlesIn: string;
+  book: ReturnType<typeof useOrderBook>["book"];
+  bookLoading: boolean;
+  trades: ReturnType<typeof useRecentTrades>["trades"];
+  strikeList: StrikeRow[];
+  strikeLoading: boolean;
+  holding: { yes: number; no: number };
+  mounted: boolean;
+  tradeView: TradeView;
+  setTradeView: (v: TradeView) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div style={{ maxWidth: 1480, margin: "0 auto", marginTop: 24 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%",
+          padding: "12px 16px",
+          background: "var(--surface)",
+          border: "1px solid var(--line-soft)",
+          borderRadius: "var(--r)",
+          color: "var(--text-2)",
+          fontFamily: "var(--sans)",
+          fontSize: 13,
+          fontWeight: 500,
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            display: "inline-block",
+            transform: open ? "rotate(90deg)" : "rotate(0deg)",
+            color: "var(--text-3)",
+          }}
+        >
+          ›
+        </span>
+        Advanced — charts, order book, depth
+        <span style={{ flex: 1 }} />
+        <span
+          style={{
+            fontFamily: "var(--mono)",
+            fontSize: 11,
+            color: "var(--text-3)",
+          }}
+        >
+          {open ? "hide" : "show"}
+        </span>
+      </button>
+
+      {open && (
+        <div className="stack" style={{ marginTop: 16 }}>
+          {/* HEADER STRIP (6-cell quant header) */}
+          <TradeHeader
             ticker={ticker}
-            strike={strike}
+            strikeDollars={strikeDollars}
             spotDollars={spotDollars}
-            strikes={strikeList}
-            loading={strikeLoading}
+            spotLoading={spotLoading}
+            yes={yesDisplay}
+            no={noDisplay}
+            estimated={priceEstimated}
+            inMoney={inMoney}
+            distPct={distPct}
+            vol24={vol24}
+            spread={spread}
+            settlesIn={settlesIn}
           />
 
-          <Card padding={14} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div
-                style={{ fontSize: 11, color: "var(--text-3)" }}
-                title="Prices sourced from Pyth Network, written on-chain at settlement."
-              >
-                Settles via Pyth
-              </div>
-              <div
-                style={{
-                  fontFamily: "var(--mono)",
-                  fontSize: 12,
-                  marginTop: 4,
-                  color: "var(--text)",
-                }}
-              >
-                {ticker}/USD
-              </div>
-            </div>
-            <a
-              href={`https://pyth.network/price-feeds/equity-us-${ticker.toLowerCase()}-usd`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={PYTH_FEED_ID[ticker]}
-              style={{ color: "var(--text-3)", display: "inline-flex" }}
-            >
-              <IconExt size={14} />
-            </a>
-          </Card>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "260px minmax(0, 1fr)",
+              gap: 16,
+            }}
+          >
+            {/* LEFT RAIL — contract / strike chain */}
+            <div className="stack">
+              <StrikeChain
+                ticker={ticker}
+                strike={strike}
+                spotDollars={spotDollars}
+                strikes={strikeList}
+                loading={strikeLoading}
+              />
 
-          <Card padding={14}>
-            <div className="label" style={{ marginBottom: 8 }}>
-              Contract
-            </div>
-            <div style={{ display: "grid", gap: 6 }}>
-              <Stat k="Type" v="Binary / 0DTE" />
-              <Stat k="Expiry" v="Today 4:00 PM ET" />
-              <Stat k="Settles" v="Pyth" />
-              <Stat k="CLOB" v="On-chain" />
-            </div>
-          </Card>
-        </div>
-
-        {/* CENTER */}
-        <div className="stack">
-          <Card padding={0}>
-            <div className="tabs" style={{ paddingLeft: 8 }}>
-              {(
-                [
-                  { id: "book", label: "Order book" },
-                  { id: "pdf", label: "Implied PDF" },
-                  { id: "intraday", label: "Intraday spot" },
-                  { id: "ladder", label: "Strike ladder" },
-                ] as { id: TradeView; label: string }[]
-              ).map((t) => (
-                <button
-                  key={t.id}
-                  className={tradeView === t.id ? "on" : ""}
-                  onClick={() => setTradeView(t.id)}
-                  type="button"
-                >
-                  {t.label}
-                </button>
-              ))}
-              <div style={{ flex: 1 }} />
-              <div
-                style={{
-                  alignSelf: "center",
-                  paddingRight: 14,
-                  fontFamily: "var(--mono)",
-                  fontSize: 11,
-                  color: "var(--text-3)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                }}
-              >
-                <MarketStatusChip />
-                {ticker} · {spotDollars != null ? fmt$(spotDollars) : "—"}
-                <DevReRollButton ticker={ticker} strike={strike} />
-              </div>
-            </div>
-
-            <div>
-              {tradeView === "book" && book && (book.bids.length > 0 || book.asks.length > 0) && (
-                <OrderBook
-                  bids={book.bids}
-                  asks={book.asks}
-                  yes={yesDisplay ?? 50}
-                  spread={spread ?? 0}
-                />
-              )}
-              {tradeView === "book" && book && book.bids.length === 0 && book.asks.length === 0 && (
-                <div
-                  style={{
-                    padding: 36,
-                    textAlign: "center",
-                    color: "var(--text-3)",
-                    fontSize: 13,
-                  }}
-                >
-                  Order book is empty — be the first to quote.
+              <Card padding={14} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div
+                    style={{ fontSize: 11, color: "var(--text-3)" }}
+                    title="Prices sourced from Pyth Network, written on-chain at settlement."
+                  >
+                    Settles via Pyth
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "var(--mono)",
+                      fontSize: 12,
+                      marginTop: 4,
+                      color: "var(--text)",
+                    }}
+                  >
+                    {ticker}/USD
+                  </div>
                 </div>
-              )}
-              {tradeView === "book" && !book && (
-                <div
-                  style={{
-                    padding: 36,
-                    textAlign: "center",
-                    color: "var(--text-3)",
-                    fontSize: 13,
-                  }}
+                <a
+                  href={`https://pyth.network/price-feeds/equity-us-${ticker.toLowerCase()}-usd`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={PYTH_FEED_ID[ticker]}
+                  style={{ color: "var(--text-3)", display: "inline-flex" }}
                 >
-                  {bookLoading ? "Loading order book…" : "No order book for this market."}
+                  <IconExt size={14} />
+                </a>
+              </Card>
+
+              <Card padding={14}>
+                <div className="label" style={{ marginBottom: 8 }}>
+                  Contract
                 </div>
-              )}
-              {tradeView === "pdf" && (
-                <div style={{ padding: 16 }}>
-                  {spotDollars != null && strikeList.length > 0 ? (
-                    <ImpliedDistribution
-                      ticker={ticker}
-                      strikes={strikeList.map((s) => ({
-                        strike: s.strike,
-                        yesPrice: s.yesCents,
-                      }))}
-                      currentPrice={Math.round(spotDollars * 100)}
+                <div style={{ display: "grid", gap: 6 }}>
+                  <Stat k="Type" v="Binary / 0DTE" />
+                  <Stat k="Expiry" v="Today 4:00 PM ET" />
+                  <Stat k="Settles" v="Pyth" />
+                  <Stat k="CLOB" v="On-chain" />
+                </div>
+              </Card>
+            </div>
+
+            {/* CENTER — charts / order book / tape / scenario */}
+            <div className="stack">
+              <Card padding={0}>
+                <div className="tabs" style={{ paddingLeft: 8 }}>
+                  {(
+                    [
+                      { id: "book", label: "Order book" },
+                      { id: "pdf", label: "Implied PDF" },
+                      { id: "intraday", label: "Intraday spot" },
+                      { id: "ladder", label: "Strike ladder" },
+                    ] as { id: TradeView; label: string }[]
+                  ).map((t) => (
+                    <button
+                      key={t.id}
+                      className={tradeView === t.id ? "on" : ""}
+                      onClick={() => setTradeView(t.id)}
+                      type="button"
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                  <div style={{ flex: 1 }} />
+                  <div
+                    style={{
+                      alignSelf: "center",
+                      paddingRight: 14,
+                      fontFamily: "var(--mono)",
+                      fontSize: 11,
+                      color: "var(--text-3)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <MarketStatusChip />
+                    {ticker} · {spotDollars != null ? fmt$(spotDollars) : "—"}
+                    <DevReRollButton ticker={ticker} strike={strike} />
+                  </div>
+                </div>
+
+                <div>
+                  {tradeView === "book" && book && (book.bids.length > 0 || book.asks.length > 0) && (
+                    <OrderBook
+                      bids={book.bids}
+                      asks={book.asks}
+                      yes={yesDisplay ?? 50}
+                      spread={spread ?? 0}
                     />
-                  ) : (
+                  )}
+                  {tradeView === "book" && book && book.bids.length === 0 && book.asks.length === 0 && (
                     <div
                       style={{
                         padding: 36,
@@ -351,74 +535,91 @@ export function TradePageClient({ ticker, strike }: Props) {
                         fontSize: 13,
                       }}
                     >
-                      Waiting for live oracle + strikes…
+                      Order book is empty — be the first to quote.
                     </div>
                   )}
+                  {tradeView === "book" && !book && (
+                    <div
+                      style={{
+                        padding: 36,
+                        textAlign: "center",
+                        color: "var(--text-3)",
+                        fontSize: 13,
+                      }}
+                    >
+                      {bookLoading ? "Loading order book…" : "No order book for this market."}
+                    </div>
+                  )}
+                  {tradeView === "pdf" && (
+                    <div style={{ padding: 16 }}>
+                      {spotDollars != null && strikeList.length > 0 ? (
+                        <ImpliedDistribution
+                          ticker={ticker}
+                          strikes={strikeList.map((s) => ({
+                            strike: s.strike,
+                            yesPrice: s.yesCents,
+                          }))}
+                          currentPrice={Math.round(spotDollars * 100)}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            padding: 36,
+                            textAlign: "center",
+                            color: "var(--text-3)",
+                            fontSize: 13,
+                          }}
+                        >
+                          Waiting for live oracle + strikes…
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {tradeView === "intraday" && (
+                    <IntradayChart
+                      ticker={ticker}
+                      spotDollars={spotDollars}
+                      strikeDollars={strikeDollars}
+                    />
+                  )}
+                  {tradeView === "ladder" && (
+                    <SpotStrikeLadder
+                      spotDollars={spotDollars}
+                      strikeCents={strike}
+                      strikes={strikeList}
+                    />
+                  )}
                 </div>
-              )}
-              {tradeView === "intraday" && (
-                <IntradayChart
-                  ticker={ticker}
-                  spotDollars={spotDollars}
-                  strikeDollars={strikeDollars}
-                />
-              )}
-              {tradeView === "ladder" && (
-                <SpotStrikeLadder
-                  spotDollars={spotDollars}
-                  strikeCents={strike}
-                  strikes={strikeList}
-                />
-              )}
+              </Card>
+
+              <Card padding={0}>
+                <div
+                  style={{
+                    padding: "12px 18px",
+                    borderBottom: "1px solid var(--line-soft)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <h4>Recent trades</h4>
+                  <span className="label">
+                    {ticker} · ${strikeDollars.toFixed(2)}
+                  </span>
+                </div>
+                <RecentTradesTable trades={trades} mounted={mounted} />
+              </Card>
+
+              <ScenarioStrip
+                ticker={ticker}
+                spotDollars={spotDollars}
+                strikeDollars={strikeDollars}
+                holding={holding}
+              />
             </div>
-          </Card>
-
-          <Card padding={0}>
-            <div
-              style={{
-                padding: "12px 18px",
-                borderBottom: "1px solid var(--line-soft)",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <h4>Recent trades</h4>
-              <span className="label">
-                {ticker} · ${strikeDollars.toFixed(2)}
-              </span>
-            </div>
-            <RecentTradesTable trades={trades} mounted={mounted} />
-          </Card>
-
-          <ScenarioStrip
-            ticker={ticker}
-            spotDollars={spotDollars}
-            strikeDollars={strikeDollars}
-            holding={holding}
-          />
+          </div>
         </div>
-
-        {/* RIGHT RAIL */}
-        <div className="stack">
-          <TradePanel
-            ticker={ticker}
-            strikeCents={strike}
-            strikeDollars={strikeDollars}
-            yes={yesDisplay}
-            no={noDisplay}
-            estimated={priceEstimated}
-            book={book}
-            holding={holding}
-            settled={isSettled}
-            outcome={settledOutcome}
-          />
-          {/* Resting (unfilled) orders for THIS market, with Cancel. Renders
-              nothing when there are none. yes/no may be null on an empty book —
-              TradePanel handles it. */}
-          <OpenOrdersForMarket market={market} />
-        </div>
-      </div>
+      )}
     </div>
   );
 }
