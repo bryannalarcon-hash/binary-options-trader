@@ -261,6 +261,39 @@ input[type=text], input[type=number], input[type=search], select, textarea, inpu
 input:focus, select:focus, textarea:focus { border-color: var(--accent-line); background: var(--bg-elev); }
 textarea { height: auto; padding: 10px 12px; }
 
+/* A11y: visible keyboard focus ring for every interactive element. Pointer
+   focus stays clean (no ring) while keyboard focus is always indicated. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* Touch targets: enlarge small controls on coarse pointers (phones/tablets). */
+@media (pointer: coarse) {
+  .btn.sm, .seg button { min-height: 36px; }
+  .qty-chip { min-height: 36px; }
+}
+
+/* Advanced grids degrade to fewer columns on narrow viewports so the
+   quant header + three-rail layout don't overflow on phones. */
+.adv-grid-3 {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+}
+@media (max-width: 860px) {
+  .adv-grid-3 { grid-template-columns: 1fr; }
+}
+.adv-grid-stats {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr 1fr 0.8fr;
+  align-items: stretch;
+}
+@media (max-width: 720px) {
+  .adv-grid-stats { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* App layout helpers */
 .app {
   min-height: 100vh;
@@ -510,4 +543,15 @@ textarea { height: auto; padding: 10px 12px; }
 }
 .wallet-adapter-modal-button-close {
   background: var(--bg-elev-2) !important;
+}
+
+/* A11y: honor prefers-reduced-motion — collapse animations/transitions and
+   stop the scrolling ticker tape for users who opt out of motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .ticker { animation: none !important; }
 }

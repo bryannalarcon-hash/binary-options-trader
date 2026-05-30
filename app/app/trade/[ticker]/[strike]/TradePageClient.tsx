@@ -248,6 +248,7 @@ export function TradePageClient({ ticker, strike }: Props) {
         mounted={mounted}
         tradeView={tradeView}
         setTradeView={setTradeView}
+        isSettled={isSettled}
       />
     </div>
   );
@@ -327,6 +328,7 @@ function AdvancedSection({
   mounted,
   tradeView,
   setTradeView,
+  isSettled,
 }: {
   ticker: Ticker;
   strike: number;
@@ -350,6 +352,7 @@ function AdvancedSection({
   mounted: boolean;
   tradeView: TradeView;
   setTradeView: (v: TradeView) => void;
+  isSettled: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -415,15 +418,10 @@ function AdvancedSection({
             vol24={vol24}
             spread={spread}
             settlesIn={settlesIn}
+            isSettled={isSettled}
           />
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "260px minmax(0, 1fr)",
-              gap: 16,
-            }}
-          >
+          <div className="adv-grid-3">
             {/* LEFT RAIL — contract / strike chain */}
             <div className="stack">
               <StrikeChain
@@ -458,6 +456,7 @@ function AdvancedSection({
                   target="_blank"
                   rel="noopener noreferrer"
                   title={PYTH_FEED_ID[ticker]}
+                  aria-label={`View ${ticker}/USD Pyth price feed (opens in new tab)`}
                   style={{ color: "var(--text-3)", display: "inline-flex" }}
                 >
                   <IconExt size={14} />
@@ -511,7 +510,7 @@ function AdvancedSection({
                       gap: 8,
                     }}
                   >
-                    <MarketStatusChip />
+                    <MarketStatusChip isSettled={isSettled} />
                     {ticker} · {spotDollars != null ? fmt$(spotDollars) : "—"}
                     <DevReRollButton ticker={ticker} strike={strike} />
                   </div>
@@ -640,6 +639,7 @@ function TradeHeader({
   vol24,
   spread,
   settlesIn,
+  isSettled,
 }: {
   ticker: Ticker;
   strikeDollars: number;
@@ -653,21 +653,16 @@ function TradeHeader({
   vol24: number;
   spread: number | null;
   settlesIn: string;
+  isSettled: boolean;
 }) {
   const spotLabel = spotDollars != null ? fmt$(spotDollars) : spotLoading ? "…" : "—";
   return (
     <Card padding={0} style={{ overflow: "hidden" }}>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1.4fr 1fr 1fr 1fr 1fr 0.8fr",
-          alignItems: "stretch",
-        }}
-      >
+      <div className="adv-grid-stats">
         <div style={{ padding: "20px 24px", borderRight: "1px solid var(--line-soft)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
             <span className="label">CONTRACT</span>
-            <MarketStatusChip />
+            <MarketStatusChip isSettled={isSettled} />
           </div>
           <div
             style={{
@@ -1660,6 +1655,7 @@ function ScenarioStrip({
         <div>
           <input
             type="range"
+            aria-label="Hypothetical closing price"
             min={min}
             max={max}
             step={0.5}
@@ -1953,10 +1949,11 @@ function TradePanel({
           <button
             type="button"
             onClick={() => setSide("yes")}
+            aria-pressed={side === "yes"}
             style={{
               padding: "12px 8px",
               background: side === "yes" ? "var(--up-soft)" : "transparent",
-              border: `1px solid ${side === "yes" ? "var(--up-line)" : "var(--line-soft)"}`,
+              border: `2px solid ${side === "yes" ? "var(--up)" : "var(--line-soft)"}`,
               color: side === "yes" ? "var(--up)" : "var(--text-3)",
               borderRadius: 8,
               cursor: "pointer",
@@ -1968,6 +1965,7 @@ function TradePanel({
             }}
           >
             <div className="label" style={{ color: "inherit", opacity: 0.7 }}>
+              {side === "yes" && <span aria-hidden style={{ marginRight: 4 }}>✓</span>}
               YES · closes ≥ ${strikeDollars.toFixed(0)}
             </div>
             <div className="num" style={{ fontSize: 20, marginTop: 4 }}>
@@ -1977,10 +1975,11 @@ function TradePanel({
           <button
             type="button"
             onClick={() => setSide("no")}
+            aria-pressed={side === "no"}
             style={{
               padding: "12px 8px",
               background: side === "no" ? "var(--down-soft)" : "transparent",
-              border: `1px solid ${side === "no" ? "var(--down-line)" : "var(--line-soft)"}`,
+              border: `2px solid ${side === "no" ? "var(--down)" : "var(--line-soft)"}`,
               color: side === "no" ? "var(--down)" : "var(--text-3)",
               borderRadius: 8,
               cursor: "pointer",
@@ -1992,6 +1991,7 @@ function TradePanel({
             }}
           >
             <div className="label" style={{ color: "inherit", opacity: 0.7 }}>
+              {side === "no" && <span aria-hidden style={{ marginRight: 4 }}>✓</span>}
               NO · closes &lt; ${strikeDollars.toFixed(0)}
             </div>
             <div className="num" style={{ fontSize: 20, marginTop: 4 }}>
@@ -2063,6 +2063,7 @@ function TradePanel({
               key={a}
               type="button"
               onClick={() => setAction(a)}
+              aria-pressed={action === a}
               style={{
                 padding: "8px 0",
                 background: action === a ? "var(--bg-elev-2)" : "transparent",
@@ -2070,7 +2071,7 @@ function TradePanel({
                 color: action === a ? "var(--text)" : "var(--text-3)",
                 borderRadius: 6,
                 cursor: "pointer",
-                fontWeight: 500,
+                fontWeight: action === a ? 600 : 500,
                 fontSize: 13,
                 borderBottom:
                   action === a
@@ -2078,6 +2079,7 @@ function TradePanel({
                     : "2px solid transparent",
               }}
             >
+              {action === a && <span aria-hidden style={{ marginRight: 4 }}>✓</span>}
               {a === "buy" ? "Buy" : "Sell"}
             </button>
           ))}
@@ -2097,7 +2099,7 @@ function TradePanel({
 
         {/* INPUTS */}
         <div style={{ marginTop: 14 }}>
-          <Label style={{ marginBottom: 6 }}>Quantity (tokens)</Label>
+          <Label style={{ marginBottom: 6 }}>Amount (shares)</Label>
           <div style={{ position: "relative" }}>
             <input
               type="number"
@@ -2119,9 +2121,11 @@ function TradePanel({
                 <button
                   key={v}
                   type="button"
+                  className="qty-chip"
+                  aria-label={`Set amount to ${v} shares`}
                   onClick={() => setQtyStr(String(v))}
                   style={{
-                    height: 24,
+                    height: 32,
                     padding: "0 8px",
                     background: "var(--bg-elev-2)",
                     border: 0,
@@ -2164,7 +2168,7 @@ function TradePanel({
           }}
         >
           <Stat k="Avg fill" v={`${effectivePx}¢`} />
-          <Stat k="Quantity" v={qty.toLocaleString()} />
+          <Stat k="Amount (shares)" v={qty.toLocaleString()} />
           <Stat k="Cost" v={fmtUsdDollars(cost)} />
           <Stat k={`Fee (${(feeBps / 100).toFixed(2)}%)`} v={fmtUsdDollars(fee)} />
           <Stat
@@ -2177,6 +2181,11 @@ function TradePanel({
             v={fmtUsdDollars(maxProfit)}
             vColor="var(--up)"
           />
+          <Stat
+            k={`Max loss if ${side.toUpperCase()} loses`}
+            v={`−${fmtUsdDollars(cost + fee)}`}
+            vColor="var(--down)"
+          />
           <div
             style={{
               marginTop: 8,
@@ -2184,7 +2193,7 @@ function TradePanel({
               borderTop: "1px solid var(--line-soft)",
             }}
           >
-            <Stat k="Implied prob" v={`${probBefore}% → ${probAfter}%`} />
+            <Stat k="Market-implied chance" v={`${probBefore}% → ${probAfter}%`} />
           </div>
         </div>
 
@@ -2208,7 +2217,7 @@ function TradePanel({
               {fmtUsdDollars(maxPayout)}
             </span>{" "}
             if {ticker} closes {side === "yes" ? "above" : "below"} $
-            {strikeDollars.toFixed(2)}.
+            {strikeDollars.toFixed(2)}, or $0 if it doesn&apos;t.
           </div>
         </div>
 
@@ -2501,6 +2510,7 @@ function DevReRollButton({ ticker, strike }: { ticker: Ticker; strike: number })
       type="button"
       onClick={() => void handle()}
       disabled={busy}
+      aria-label="Re-roll this strike into a fresh future-dated market (dev)"
       title="DEV (localnet): create a fresh future-dated market for this strike so you can keep trading past the 0DTE close"
       style={{
         marginLeft: 8,
