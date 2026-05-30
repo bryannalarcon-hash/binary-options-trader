@@ -15,15 +15,21 @@ import { AdminWalletAdapter } from "@/lib/admin-wallet";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
-// Silence the benign "ws error: …" noise @solana/web3.js logs when its RPC
-// WebSocket hiccups under devnet throttling. Our data hooks (markets/spot/book)
-// all fall back to polling on a WS drop, so this is console noise, not a real
-// failure — and only this exact prefix is filtered; every other error passes.
+// Silence the benign RPC-throttling noise @solana/web3.js logs on the free-tier
+// devnet endpoint: "ws error: …" on a WebSocket hiccup, and "Server responded
+// with 429 … Retrying after Nms delay" when the HTTP RPC rate-limits. web3.js
+// retries both automatically and our data hooks fall back to polling, so these
+// are console noise, not real failures. Only these exact benign shapes are
+// filtered; every other error passes through untouched.
 if (typeof window !== "undefined" && !(window as { __wsErrPatched?: boolean }).__wsErrPatched) {
   (window as { __wsErrPatched?: boolean }).__wsErrPatched = true;
   const origError = console.error.bind(console);
+  const isBenignRpcNoise = (msg: string): boolean =>
+    msg.startsWith("ws error") ||
+    msg.startsWith("Server responded with 429") ||
+    (msg.includes("429") && msg.includes("Retrying after"));
   console.error = (...args: unknown[]) => {
-    if (typeof args[0] === "string" && args[0].startsWith("ws error")) return;
+    if (typeof args[0] === "string" && isBenignRpcNoise(args[0])) return;
     origError(...args);
   };
 }
