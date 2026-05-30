@@ -64,36 +64,36 @@ export function ConfirmTradeModal({
     <ModalShell title="Confirm trade" onClose={onCancel}>
       <div className="space-y-3 text-sm">
         <div className="rounded-md border border-border bg-bg/40 p-3">
-          <p className="text-zinc-400">{TICKER_NAME[ticker]} ({ticker})</p>
+          <p className="text-3">{TICKER_NAME[ticker]} ({ticker})</p>
           <p className="mt-1 text-base font-medium">
             {label} {fmtCount(quantity)} tokens at strike ${(strike / 100).toFixed(2)}
           </p>
         </div>
         <ul className="space-y-1 font-mono text-xs">
           <li className="flex justify-between">
-            <span className="text-zinc-400">Avg price</span>
+            <span className="text-3">Avg price</span>
             <span>{fmtCents(pricePerToken)}</span>
           </li>
           <li className="flex justify-between">
-            <span className="text-zinc-400">Subtotal</span>
+            <span className="text-3">Subtotal</span>
             <span>{fmtUsdDollars(totalCost)}</span>
           </li>
           <li className="flex justify-between">
-            <span className="text-zinc-400">Fee ({(feeBps / 100).toFixed(2)}%)</span>
+            <span className="text-3">Fee ({(feeBps / 100).toFixed(2)}%)</span>
             <span>{fmtUsdDollars(fee)}</span>
           </li>
-          <li className="flex justify-between border-t border-border/50 pt-1 text-zinc-200">
+          <li className="flex justify-between border-t border-border/50 pt-1 text-text">
             <span>{intent === "buy" ? "Total cost" : "Net proceeds"}</span>
             <span>{fmtUsdDollars(net)}</span>
           </li>
         </ul>
         {intent === "buy" && (
-          <p className="rounded bg-bg/60 p-2 text-xs text-zinc-300">
+          <p className="rounded bg-bg/60 p-2 text-xs text-2">
             Max payout if {side === "yes" ? "Yes" : "No"} wins:{" "}
             <strong>{fmtUsdDollars(quantity)}</strong>
           </p>
         )}
-        <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-3">
           <input
             type="checkbox"
             checked={dontShow}
