@@ -17,10 +17,7 @@ import {
   IconRefresh,
   IconXCircle,
   Label,
-  SectionTitle,
-  StrikePill,
   fmt$,
-  fmtPct,
 } from "@/components/caret";
 import { RedeemConfirmationModal } from "@/components/RedeemConfirmationModal";
 import { fmtUsdDollars } from "@/lib/format";
@@ -31,12 +28,14 @@ import { useUsdcBalance } from "@/lib/usdc";
 import { useMounted, useWalletReady } from "@/lib/use-mounted";
 
 /**
- * Portfolio — caret design ported from prototype/js/portfolio.jsx.
+ * Portfolio — the "did I win?" moment.
  *
- * All data hooks preserved:
+ * Approachable-retail redesign: calm card layout, plain language, an obvious
+ * and reassuring redeem action. ALL data hooks and on-chain logic preserved:
  *   - useUserPositions (real on-chain SPL balances with mock fallback)
  *   - useUsdcBalance
  *   - buildAndSendRedeem (via RedeemConfirmationModal)
+ *   - settled aggregate / redeemable set / refresh-on-error are unchanged math.
  */
 export default function PortfolioPage() {
   const mounted = useMounted();
@@ -54,9 +53,7 @@ export default function PortfolioPage() {
     return (
       <div className="page">
         <h2 style={{ marginBottom: 24 }}>Portfolio</h2>
-        <div style={{ color: "var(--text-3)", fontSize: 13, fontFamily: "var(--mono)" }}>
-          Connecting wallet…
-        </div>
+        <div style={{ color: "var(--text-3)", fontSize: 13 }}>Connecting wallet…</div>
       </div>
     );
   }
@@ -67,7 +64,7 @@ export default function PortfolioPage() {
         <h2 style={{ marginBottom: 24 }}>Portfolio</h2>
         <EmptyState
           title="Connect a wallet to see your positions"
-          desc="Meridian is non-custodial. Phantom, Solflare, and Backpack all work on Solana devnet."
+          desc="Meridian is non-custodial — your funds stay in your wallet. Phantom, Solflare, and Backpack all work on Solana devnet."
           cta="Connect Wallet"
           onCta={() => setConnectOpen(true)}
         />
@@ -115,120 +112,96 @@ export default function PortfolioPage() {
   const redeemableTokens = redeemable.reduce((s, p) => s + p.quantity, 0);
 
   return (
-    <div className="page">
+    <div className="page" style={{ maxWidth: 920 }}>
+      {/* HEADER ───────────────────────────────────────────────────────────── */}
       <div
         style={{
           display: "flex",
           alignItems: "flex-end",
           justifyContent: "space-between",
-          marginBottom: 24,
+          marginBottom: 20,
           flexWrap: "wrap",
           gap: 12,
         }}
       >
         <div>
-          <Label>Connected{wallet.publicKey ? ` · ${shortAddr(wallet.publicKey.toBase58())}` : ""}</Label>
-          <h2 style={{ marginTop: 6 }}>Portfolio</h2>
+          <Label>
+            Connected{wallet.publicKey ? ` · ${shortAddr(wallet.publicKey.toBase58())}` : ""}
+          </Label>
+          <h2 style={{ marginTop: 6 }}>Your portfolio</h2>
           <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 6 }}>
-            {active.length} open · {settled.length} settled (last 30d)
+            {active.length} open · {settled.length} settled in the last 30 days
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Button
-            leftIcon={<IconRefresh size={13} />}
-            onClick={() => refetch()}
-          >
-            Refresh
-          </Button>
-          {redeemable.length > 0 && (
-            <Button primary onClick={() => setRedeemTarget(redeemable)}>
-              Redeem {redeemableTokens} winning token{redeemableTokens === 1 ? "" : "s"} · {fmt$(redeemableTokens)}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* SUMMARY ROW */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(5, 1fr)",
-          gap: 1,
-          background: "var(--line-soft)",
-          border: "1px solid var(--line-soft)",
-          borderRadius: 12,
-          overflow: "hidden",
-          marginBottom: 24,
-        }}
-      >
-        <SummaryCell
-          label="Open value (mark)"
-          value={fmt$(totalMark)}
-          aux={`from ${fmt$(totalCost)} cost`}
-        />
-        <SummaryCell
-          label="Unrealized P&L"
-          value={(totalMtm >= 0 ? "+" : "") + fmt$(totalMtm)}
-          valueClass={totalMtm >= 0 ? "up" : "dn"}
-          aux={totalCost > 0 ? fmtPct((totalMtm / totalCost) * 100, 1, true) : "—"}
-        />
-        <SummaryCell
-          label="Today realized"
-          value={(settledPnl >= 0 ? "+" : "") + fmt$(settledPnl)}
-          valueClass={settledPnl >= 0 ? "up" : "dn"}
-          aux={`${settled.length} settled`}
-        />
-        <SummaryCell
-          label="USDC balance"
-          value={usdc.cents != null ? fmtUsdDollars(usdc.cents / 100) : "—"}
-          aux="on-chain"
-        />
-        <SummaryCell
-          label="In the money"
-          value={`${winRate}%`}
-          aux={`${itmCount} ITM / ${otmCount} OTM`}
-        />
-      </div>
-
-      {/* OPEN POSITIONS */}
-      <Card padding={0} style={{ marginBottom: 20 }}>
-        <div
-          style={{
-            padding: "14px 18px",
-            borderBottom: "1px solid var(--line-soft)",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
+        <button
+          type="button"
+          className="btn"
+          onClick={() => refetch()}
+          aria-label="Refresh positions"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
         >
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-            <h3>Open positions</h3>
-            <span className="pill">{active.length}</span>
-          </div>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              fontFamily: "var(--mono)",
-              fontSize: 11,
-              color: "var(--text-3)",
-            }}
-          >
-            <span>Settles 4:00 PM ET</span>
-          </div>
-        </div>
+          <IconRefresh size={13} /> Refresh
+        </button>
+      </div>
+
+      {/* WINNINGS BANNER — the reassuring, obvious "you can claim this" moment.
+          Calm card, not a jackpot: states the amount in plain dollars and offers
+          one clear action. Renders only when there is something to redeem. */}
+      {redeemable.length > 0 && (
+        <RedeemBanner
+          tokens={redeemableTokens}
+          onRedeem={() => setRedeemTarget(redeemable)}
+        />
+      )}
+
+      {/* SNAPSHOT — one calm row of plain-language numbers. P&L pairs sign + word
+          + color so meaning is never color-only. */}
+      <div className="pf-snap" style={{ marginBottom: 28 }}>
+        <SnapCell
+          label="Positions worth now"
+          value={fmt$(totalMark)}
+          aux={`You paid ${fmt$(totalCost)}`}
+        />
+        <SnapCell
+          label="Up or down today"
+          value={(totalMtm >= 0 ? "+" : "−") + fmt$(Math.abs(totalMtm))}
+          tone={totalMtm >= 0 ? "up" : "dn"}
+          aux={
+            totalCost > 0
+              ? `${totalMtm >= 0 ? "Up" : "Down"} ${Math.abs((totalMtm / totalCost) * 100).toFixed(1)}%`
+              : "Open positions"
+          }
+        />
+        <SnapCell
+          label="Cash in wallet"
+          value={usdc.cents != null ? fmtUsdDollars(usdc.cents / 100) : "—"}
+          aux="USDC, on-chain"
+        />
+        <SnapCell
+          label="Favored to win"
+          value={`${winRate}%`}
+          aux={`${itmCount} ahead · ${otmCount} behind`}
+        />
+      </div>
+
+      {/* OPEN POSITIONS ───────────────────────────────────────────────────── */}
+      <section style={{ marginBottom: 32 }}>
+        <SectionHead
+          title="What you hold"
+          count={active.length}
+          hint="Each settles today at 4:00 PM ET"
+        />
 
         {loading ? (
-          <div style={{ padding: 24 }}>
+          <div className="stack" style={{ gap: 10 }}>
             {Array.from({ length: 3 }).map((_, i) => (
               <div
                 key={i}
                 style={{
-                  height: 56,
-                  background: "var(--bg-elev-2)",
-                  borderRadius: 6,
-                  marginBottom: 8,
+                  height: 96,
+                  background: "var(--bg-elev)",
+                  border: "1px solid var(--line-soft)",
+                  borderRadius: "var(--r-lg)",
                   opacity: 0.5,
                 }}
               />
@@ -236,249 +209,119 @@ export default function PortfolioPage() {
           </div>
         ) : error && active.length === 0 ? (
           // Terminal error state: the on-chain read couldn't complete (e.g. an
-          // RPC hang after the close). Never an infinite skeleton — show an
-          // honest notice with a retry instead.
-          <div style={{ padding: 36, textAlign: "center" }}>
-            <p style={{ color: "var(--text-3)", fontSize: 14 }}>
-              Couldn&apos;t read positions from the chain (RPC timed out).
+          // RPC hang). Never an infinite skeleton — an honest notice + retry.
+          <Card style={{ textAlign: "center", padding: "40px 32px" }}>
+            <p style={{ color: "var(--text-2)", fontSize: 14, margin: 0 }}>
+              We couldn&apos;t read your positions from the chain — the network request
+              timed out.
             </p>
             <button
               type="button"
               className="btn primary"
-              style={{ marginTop: 12 }}
+              style={{ marginTop: 16 }}
               onClick={() => refetch()}
             >
-              Retry
+              Try again
             </button>
-          </div>
+          </Card>
         ) : active.length === 0 ? (
-          <div style={{ padding: 36, textAlign: "center" }}>
-            <p style={{ color: "var(--text-3)", fontSize: 14 }}>
-              No active positions.
+          <Card style={{ textAlign: "center", padding: "44px 32px" }}>
+            <p style={{ color: "var(--text-2)", fontSize: 14, margin: 0 }}>
+              You don&apos;t hold any positions right now.
             </p>
             <Link
               href="/markets"
               className="btn primary"
-              style={{ marginTop: 12, display: "inline-flex", textDecoration: "none" }}
+              style={{
+                marginTop: 16,
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                textDecoration: "none",
+              }}
             >
               Browse markets <IconCaret size={11} />
             </Link>
-          </div>
+          </Card>
         ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Contract</th>
-                <th>Side</th>
-                <th style={{ textAlign: "right" }}>Qty</th>
-                <th style={{ textAlign: "right" }}>Avg / Mark</th>
-                <th style={{ textAlign: "right" }}>Cost</th>
-                <th style={{ textAlign: "right" }}>Value</th>
-                <th style={{ textAlign: "right" }}>Unrealized</th>
-                <th style={{ textAlign: "right" }} title="Payout and profit if this side wins at settlement ($1 per token)">
-                  If it wins
-                </th>
-                <th style={{ textAlign: "center" }}>Spot vs strike</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {active.map((p, i) => (
-                <PositionRow key={`${p.market.address}-${p.side}-${i}`} p={p} />
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
-
-      {/* SETTLED + P&L CURVE */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16 }}>
-        <Card padding={0}>
-          <div
-            style={{
-              padding: "14px 18px",
-              borderBottom: "1px solid var(--line-soft)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <h3>Settled (last 30 days)</h3>
-              <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>
-                {redeemable.length > 0
-                  ? `${redeemableTokens} winning token${redeemableTokens === 1 ? "" : "s"} redeemable for $1.00 each`
-                  : "Winning tokens redeem for $1.00 each"}
-              </div>
-            </div>
-            {redeemable.length > 0 && (
-              <Button sm primary onClick={() => setRedeemTarget(redeemable)}>
-                Redeem all winnings · {fmt$(redeemableTokens)}
-              </Button>
-            )}
+          <div className="pf-cards">
+            {active.map((p, i) => (
+              <OpenPositionCard key={`${p.market.address}-${p.side}-${i}`} p={p} />
+            ))}
           </div>
-          {settled.length === 0 ? (
-            <div
+        )}
+      </section>
+
+      {/* SETTLED ──────────────────────────────────────────────────────────── */}
+      <section>
+        <SectionHead
+          title="Settled"
+          count={settled.length}
+          hint={
+            redeemable.length > 0
+              ? `${redeemableTokens} winning share${redeemableTokens === 1 ? "" : "s"} ready to redeem`
+              : "Winning shares redeem for $1.00 each"
+          }
+          action={
+            redeemable.length > 0 ? (
+              <Button sm primary onClick={() => setRedeemTarget(redeemable)}>
+                Redeem all · {fmt$(redeemableTokens)}
+              </Button>
+            ) : undefined
+          }
+        />
+
+        {settled.length === 0 ? (
+          <Card style={{ textAlign: "center", padding: "44px 32px" }}>
+            <p
               style={{
-                padding: 36,
-                textAlign: "center",
                 color: "var(--text-3)",
-                fontSize: 13,
+                fontSize: 13.5,
+                lineHeight: 1.6,
+                maxWidth: 460,
+                margin: "0 auto",
               }}
             >
-              No settled positions. Once you hold a position into a market&apos;s
-              4:00 PM ET settlement, it shows here — winners redeem for $1.00 per token.
+              No settled positions yet. Once you hold a position into a market&apos;s
+              4:00&nbsp;PM&nbsp;ET settlement it shows here — winning shares redeem for
+              $1.00 each.
+            </p>
+          </Card>
+        ) : (
+          <>
+            <div className="pf-cards">
+              {settled.map((p, i) => (
+                <SettledPositionCard
+                  key={`${p.market.address}-${p.side}-${i}-settled`}
+                  p={p}
+                  onRedeem={() => setRedeemTarget([p])}
+                />
+              ))}
             </div>
-          ) : (
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Contract</th>
-                  <th>Side</th>
-                  <th style={{ textAlign: "right" }}>Qty</th>
-                  <th style={{ textAlign: "right" }}>Close</th>
-                  <th>Outcome</th>
-                  <th style={{ textAlign: "right" }}>P&L</th>
-                  <th style={{ textAlign: "right", paddingRight: 18 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {settled.map((p, i) => {
-                  const ticker = p.market.ticker as Ticker;
-                  const won = p.market.outcome === p.side;
-                  const payout = won ? p.quantity : 0;
-                  const cost = p.entryPrice != null ? (p.entryPrice * p.quantity) / 100 : null;
-                  const pnl = cost != null ? payout - cost : null;
-                  const close =
-                    p.market.settlementPrice != null
-                      ? p.market.settlementPrice / 100
-                      : null;
-                  const date = p.market.settlementTs
-                    ? new Date(p.market.settlementTs * 1000).toLocaleDateString(
-                        "en-US",
-                        { month: "short", day: "numeric" },
-                      )
-                    : "—";
-                  return (
-                    <tr key={`${p.market.address}-${p.side}-${i}-settled`}>
-                      <td className="mono" style={{ color: "var(--text-3)", fontSize: 12 }}>
-                        {date}
-                      </td>
-                      <td>
-                        <span style={{ fontWeight: 500 }}>{ticker}</span>{" "}
-                        <IconCaret
-                          size={9}
-                          style={{ verticalAlign: "middle", color: "var(--accent)" }}
-                        />{" "}
-                        <span className="num">${(p.market.strike / 100).toFixed(2)}</span>
-                      </td>
-                      <td
-                        className={p.side === "yes" ? "up" : "dn"}
-                        style={{
-                          fontFamily: "var(--mono)",
-                          textTransform: "uppercase",
-                          fontSize: 12,
-                        }}
-                      >
-                        {p.side}
-                      </td>
-                      <td className="num" style={{ textAlign: "right" }}>
-                        {p.quantity}
-                      </td>
-                      <td className="num" style={{ textAlign: "right" }}>
-                        {close != null ? fmt$(close) : "—"}
-                      </td>
-                      <td>
-                        {won ? (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 5,
-                              color: "var(--up)",
-                              fontSize: 12,
-                            }}
-                          >
-                            <IconCheckCircle size={12} /> Win
-                          </span>
-                        ) : (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 5,
-                              color: "var(--down)",
-                              fontSize: 12,
-                            }}
-                          >
-                            <IconXCircle size={12} /> Loss
-                          </span>
-                        )}
-                      </td>
-                      <td
-                        className={pnl == null ? "num" : pnl >= 0 ? "up num" : "dn num"}
-                        style={{ textAlign: "right" }}
-                      >
-                        {pnl != null ? `${pnl >= 0 ? "+" : ""}${fmt$(pnl)}` : "—"}
-                      </td>
-                      <td style={{ textAlign: "right", paddingRight: 18 }}>
-                        {won ? (
-                          <button
-                            type="button"
-                            className="btn sm"
-                            onClick={() => setRedeemTarget([p])}
-                          >
-                            Redeem
-                          </button>
-                        ) : (
-                          <span
-                            style={{
-                              fontSize: 11,
-                              color: "var(--text-3)",
-                              fontFamily: "var(--mono)",
-                            }}
-                          >
-                            —
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </Card>
 
-        <Card padding={20}>
-          <SectionTitle>30-day P&L curve</SectionTitle>
-          <PnlCurve settled={settled} />
-          <div
-            style={{
-              marginTop: 14,
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 8,
-            }}
-          >
-            <SummaryCellInline label="Open positions" value={active.length.toString()} />
-            <SummaryCellInline label="In the money" value={`${winRate}%`} />
-            <SummaryCellInline
-              label="Realized 30d"
-              value={fmt$(settledPnl)}
-              tone={settledPnl >= 0 ? "up" : "dn"}
-            />
-            <SummaryCellInline
-              label="Unrealized"
-              value={fmt$(totalMtm)}
-              tone={totalMtm >= 0 ? "up" : "dn"}
-            />
-          </div>
-        </Card>
-      </div>
+            {/* Realized P&L over the settled window — quiet, supportive, not a
+                trading terminal. Only shown when there's history to plot. */}
+            <Card style={{ marginTop: 16, padding: 20 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  justifyContent: "space-between",
+                  marginBottom: 12,
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <h4 style={{ margin: 0 }}>Your results over time</h4>
+                <span style={{ fontSize: 12, color: "var(--text-3)" }}>
+                  Realized profit &amp; loss, last 30 days
+                </span>
+              </div>
+              <PnlCurve settled={settled} />
+            </Card>
+          </>
+        )}
+      </section>
 
       {redeemTarget && (
         <RedeemConfirmationModal
@@ -490,252 +333,513 @@ export default function PortfolioPage() {
           }}
         />
       )}
+
+      {/* Scoped responsive rules. Uses only design tokens; collapses the snapshot
+          and card grids on narrow screens so nothing overflows on mobile. Plain
+          <style> (not styled-jsx) keeps this independent of build plugins. */}
+      <style
+        dangerouslySetInnerHTML={{
+          __html: `
+        .pf-snap {
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          gap: 1px;
+          background: var(--line-soft);
+          border: 1px solid var(--line-soft);
+          border-radius: var(--r-lg);
+          overflow: hidden;
+        }
+        .pf-cards {
+          display: grid;
+          grid-template-columns: repeat(2, 1fr);
+          gap: 12px;
+        }
+        @media (max-width: 720px) {
+          .pf-snap { grid-template-columns: repeat(2, 1fr); }
+        }
+        @media (max-width: 600px) {
+          .pf-cards { grid-template-columns: 1fr; }
+        }
+      `,
+        }}
+      />
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Subcomponents
+// Header / chrome
 // ---------------------------------------------------------------------------
-function SummaryCell({
-  label,
-  value,
-  valueClass,
-  aux,
+function SectionHead({
+  title,
+  count,
+  hint,
+  action,
 }: {
-  label: string;
-  value: string;
-  valueClass?: string;
-  aux?: string;
+  title: string;
+  count: number;
+  hint?: string;
+  action?: React.ReactNode;
 }) {
   return (
-    <div style={{ background: "var(--bg-elev)", padding: "16px 18px" }}>
-      <div className="label">{label}</div>
-      <div
-        className={`num ${valueClass || ""}`}
-        style={{ fontSize: 22, fontWeight: 500, marginTop: 6 }}
-      >
-        {value}
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-end",
+        justifyContent: "space-between",
+        marginBottom: 14,
+        gap: 12,
+        flexWrap: "wrap",
+      }}
+    >
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <h3 style={{ margin: 0 }}>{title}</h3>
+          <span className="pill">{count}</span>
+        </div>
+        {hint && (
+          <div style={{ fontSize: 12.5, color: "var(--text-3)", marginTop: 4 }}>{hint}</div>
+        )}
       </div>
-      <div
-        style={{
-          fontSize: 11.5,
-          color: "var(--text-3)",
-          marginTop: 2,
-          fontFamily: "var(--mono)",
-        }}
-      >
-        {aux}
-      </div>
+      {action}
     </div>
   );
 }
 
-function SummaryCellInline({
+function SnapCell({
   label,
   value,
+  aux,
   tone,
 }: {
   label: string;
   value: string;
+  aux?: string;
   tone?: "up" | "dn";
 }) {
-  const bg =
-    tone === "up" ? "var(--up-soft)" : tone === "dn" ? "var(--down-soft)" : "var(--bg-elev-2)";
   const color = tone === "up" ? "var(--up)" : tone === "dn" ? "var(--down)" : "var(--text)";
   return (
-    <div style={{ padding: 12, background: bg, borderRadius: 6 }}>
-      <div className="label" style={tone ? { color } : undefined}>
-        {label}
-      </div>
-      <div className="num" style={{ fontSize: 18, marginTop: 4, color }}>
+    <div style={{ background: "var(--bg-elev)", padding: "16px 18px" }}>
+      <div className="label">{label}</div>
+      <div
+        className="num"
+        style={{ fontSize: 22, fontWeight: 600, marginTop: 6, color, lineHeight: 1.1 }}
+      >
         {value}
       </div>
+      {aux && (
+        <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 3 }}>{aux}</div>
+      )}
     </div>
   );
 }
 
-/**
- * One open-position row. Reads the REAL oracle spot for this ticker and shows
- * cost/value/unrealized only when the basis is known; otherwise "—".
- */
-function PositionRow({ p }: { p: Position }) {
+// ---------------------------------------------------------------------------
+// Winnings banner — the reassuring redeem prompt.
+// ---------------------------------------------------------------------------
+function RedeemBanner({ tokens, onRedeem }: { tokens: number; onRedeem: () => void }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 16,
+        flexWrap: "wrap",
+        padding: "18px 20px",
+        marginBottom: 24,
+        background: "var(--up-soft)",
+        border: "1px solid var(--up-line)",
+        borderRadius: "var(--r-lg)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+        <span
+          aria-hidden
+          style={{ color: "var(--up)", display: "inline-flex", flexShrink: 0 }}
+        >
+          <IconCheckCircle size={20} />
+        </span>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>
+            You have winnings to claim
+          </div>
+          <div style={{ fontSize: 13, color: "var(--text-2)", marginTop: 2 }}>
+            {tokens} winning share{tokens === 1 ? "" : "s"} · worth{" "}
+            <span className="num" style={{ color: "var(--up)", fontWeight: 600 }}>
+              {fmt$(tokens)}
+            </span>{" "}
+            at $1.00 each
+          </div>
+        </div>
+      </div>
+      <button
+        type="button"
+        className="btn primary lg"
+        onClick={onRedeem}
+        style={{ flexShrink: 0 }}
+      >
+        Redeem {fmt$(tokens)}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Open position card — what you hold, what it's worth, up/down.
+// Reads the REAL oracle spot for the spot-vs-strike mini. Cost / value /
+// up-down only render when the basis is known; otherwise an honest "—".
+// ---------------------------------------------------------------------------
+function OpenPositionCard({ p }: { p: Position }) {
   const ticker = p.market.ticker as Ticker;
   const { spotUsd } = useSpotPrice(ticker);
   const spotDollars = spotUsd; // number | null
   const strikeDollars = p.market.strike / 100;
   // ITM = the market currently prices THIS side above 50¢ (favored to win at
-  // settlement). Same basis as the portfolio "In the money" stat so the labels
-  // never contradict. The spot-vs-strike mini-chart shows the underlying.
+  // settlement). Same basis as the portfolio "Favored to win" stat so the
+  // labels never contradict.
   const itm = p.currentPrice != null ? p.currentPrice > 50 : null;
   const cost = p.entryPrice != null ? (p.entryPrice * p.quantity) / 100 : null;
   const value = p.currentPrice != null ? (p.currentPrice * p.quantity) / 100 : null;
   const mtm = cost != null && value != null ? value - cost : null;
   const mtmPct = mtm != null && cost != null && cost > 0 ? (mtm / cost) * 100 : null;
-  // Settlement view: each token pays $1 if this side wins. Profit-if-wins is
-  // gross of the (already-paid) entry fee.
+  // Settlement view: each share pays $1 if this side wins.
   const payoutIfWin = p.quantity;
   const profitIfWin = cost != null ? payoutIfWin - cost : null;
 
+  const sideUp = p.side === "yes";
+
   return (
-    <tr
-      className="row-hover"
-      style={{ cursor: "pointer" }}
-      onClick={() => {
-        window.location.href = `/trade/${ticker}/${p.market.strike}`;
+    <Link
+      href={`/trade/${ticker}/${p.market.strike}`}
+      className="card row-hover"
+      style={{
+        display: "block",
+        padding: 18,
+        textDecoration: "none",
+        color: "inherit",
       }}
     >
-      <td>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-          <span style={{ fontWeight: 500 }}>{ticker}</span>
-          <IconCaret size={11} style={{ color: "var(--accent)", alignSelf: "center" }} />
-          <span className="num">${strikeDollars.toFixed(2)}</span>
-          {itm != null &&
-            (itm ? (
-              <StrikePill tone="atm">ITM</StrikePill>
-            ) : (
-              <StrikePill>OTM</StrikePill>
-            ))}
-        </div>
-        <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 2 }}>
-          {TICKER_NAME[ticker]} · settles today
-        </div>
-      </td>
-      <td>
-        <span
-          className={p.side === "yes" ? "up mono" : "dn mono"}
-          style={{ textTransform: "uppercase", fontWeight: 600 }}
-        >
-          {p.side}
-        </span>
-      </td>
-      <td className="num" style={{ textAlign: "right" }}>
-        {p.quantity}
-      </td>
-      <td className="num" style={{ textAlign: "right" }}>
-        <div>{p.entryPrice != null ? `${p.entryPrice}¢` : "—"}</div>
-        <div style={{ color: "var(--text-3)", fontSize: 11 }}>
-          {p.currentPrice != null ? `${p.currentPrice}¢` : "—"}
-        </div>
-      </td>
-      <td className="num" style={{ textAlign: "right", color: "var(--text-3)" }}>
-        {cost != null ? fmt$(cost) : "—"}
-      </td>
-      <td className="num" style={{ textAlign: "right" }}>
-        {value != null ? fmt$(value) : "—"}
-      </td>
-      <td
-        className={mtm == null ? "num" : mtm >= 0 ? "up num" : "dn num"}
-        style={{ textAlign: "right" }}
-      >
-        {mtm != null ? (
-          <>
-            <div>{mtm >= 0 ? "+" : ""}{fmt$(mtm)}</div>
-            <div style={{ fontSize: 11, opacity: 0.7 }}>
-              {mtm >= 0 ? "+" : ""}
-              {mtmPct != null ? mtmPct.toFixed(1) : "0.0"}%
-            </div>
-          </>
-        ) : (
-          <span style={{ color: "var(--text-3)" }} title="No on-chain cost basis found">
-            —
-          </span>
-        )}
-      </td>
-      <td
-        className="num"
-        style={{ textAlign: "right" }}
-        title={`Each ${p.side.toUpperCase()} token redeems for $1 if it wins at 4 PM ET settlement`}
-      >
-        <div style={{ color: "var(--up)" }}>{fmt$(payoutIfWin)}</div>
-        <div style={{ fontSize: 11, color: "var(--text-3)" }}>
-          {profitIfWin != null
-            ? `${profitIfWin >= 0 ? "+" : ""}${fmt$(profitIfWin)} profit`
-            : "—"}
-        </div>
-      </td>
-      <td style={{ textAlign: "center" }}>
-        {spotDollars != null ? (
-          <SpotStrikeMini spot={spotDollars} strike={strikeDollars} />
-        ) : (
-          <span style={{ color: "var(--text-3)", fontSize: 11 }}>—</span>
-        )}
-      </td>
-      <td style={{ textAlign: "right", paddingRight: 18 }}>
-        <Link
-          href={`/trade/${ticker}/${p.market.strike}`}
-          onClick={(e) => e.stopPropagation()}
-          className="btn sm"
-          style={{ textDecoration: "none" }}
-        >
-          Trade
-        </Link>
-      </td>
-    </tr>
-  );
-}
-
-function SpotStrikeMini({ spot, strike }: { spot: number; strike: number }) {
-  const range = Math.max(Math.abs(spot - strike) * 4, strike * 0.05);
-  const lo = strike - range;
-  const hi = strike + range;
-  const t = Math.max(0.04, Math.min(0.96, (spot - lo) / (hi - lo)));
-  const w = 140;
-  return (
-    <div style={{ width: w, display: "inline-block" }}>
-      <div
-        style={{
-          position: "relative",
-          height: 6,
-          background: "var(--bg-elev-2)",
-          borderRadius: 3,
-          overflow: "visible",
-        }}
-      >
-        <div
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: -2,
-            bottom: -2,
-            width: 1.5,
-            background: "var(--accent)",
-          }}
-        />
-        <div
-          style={{
-            position: "absolute",
-            left: `${t * 100}%`,
-            top: -3,
-            transform: "translateX(-50%)",
-            width: 8,
-            height: 12,
-            background: "var(--text)",
-            borderRadius: 2,
-          }}
-        />
-      </div>
+      {/* Title: plain-language question + side */}
       <div
         style={{
           display: "flex",
+          alignItems: "flex-start",
           justifyContent: "space-between",
-          fontFamily: "var(--mono)",
-          fontSize: 9.5,
-          color: "var(--text-3)",
-          marginTop: 4,
+          gap: 10,
         }}
       >
-        <span>{fmt$(spot, 2)}</span>
-        <span style={{ color: "var(--accent)" }}>K {fmt$(strike, 0)}</span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>
+            {ticker} above ${strikeDollars.toFixed(2)}?
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 3 }}>
+            {TICKER_NAME[ticker]} · settles today
+          </div>
+        </div>
+        <span
+          className={`pill ${sideUp ? "up" : "dn"}`}
+          style={{ flexShrink: 0 }}
+        >
+          {sideUp ? "Yes" : "No"}
+        </span>
+      </div>
+
+      {/* Holding + value */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: 12,
+          marginTop: 16,
+        }}
+      >
+        <Field label="Shares" value={`${p.quantity}`} />
+        <Field label="You paid" value={cost != null ? fmt$(cost) : "—"} />
+        <Field
+          label="Worth now"
+          value={value != null ? fmt$(value) : "—"}
+          align="right"
+        />
+      </div>
+
+      {/* Up/Down line — sign + word + color, so meaning is never color-only */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginTop: 14,
+          paddingTop: 14,
+          borderTop: "1px solid var(--line-soft)",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        {mtm != null ? (
+          <div
+            className={mtm >= 0 ? "up" : "dn"}
+            style={{ display: "flex", alignItems: "baseline", gap: 8 }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 600 }}>
+              {mtm >= 0 ? "Up" : "Down"}
+            </span>
+            <span className="num" style={{ fontSize: 15, fontWeight: 600 }}>
+              {mtm >= 0 ? "+" : "−"}
+              {fmt$(Math.abs(mtm))}
+            </span>
+            {mtmPct != null && (
+              <span className="num" style={{ fontSize: 12, opacity: 0.8 }}>
+                {mtm >= 0 ? "+" : "−"}
+                {Math.abs(mtmPct).toFixed(1)}%
+              </span>
+            )}
+          </div>
+        ) : (
+          <span
+            style={{ fontSize: 12, color: "var(--text-3)" }}
+            title="No on-chain cost basis found for this position"
+          >
+            No cost basis on chain
+          </span>
+        )}
+
+        <div
+          style={{ fontSize: 12, color: "var(--text-3)", textAlign: "right" }}
+          title={`Each ${sideUp ? "Yes" : "No"} share redeems for $1 if it wins at 4 PM ET settlement`}
+        >
+          If it wins:{" "}
+          <span className="num" style={{ color: "var(--up)", fontWeight: 600 }}>
+            {fmt$(payoutIfWin)}
+          </span>
+          {profitIfWin != null && (
+            <>
+              {" "}
+              <span className="num">
+                ({profitIfWin >= 0 ? "+" : "−"}
+                {fmt$(Math.abs(profitIfWin))})
+              </span>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Spot vs strike — small, calm context */}
+      {spotDollars != null && (
+        <div style={{ marginTop: 14 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 6,
+            }}
+          >
+            <span style={{ fontSize: 11, color: "var(--text-3)" }}>
+              {ticker} now {fmt$(spotDollars, 2)} vs ${strikeDollars.toFixed(0)} target
+            </span>
+            {itm != null && (
+              <span
+                className={itm ? "up" : "dn"}
+                style={{ fontSize: 11, fontWeight: 600 }}
+              >
+                {itm ? "Ahead" : "Behind"}
+              </span>
+            )}
+          </div>
+          <SpotStrikeMini spot={spotDollars} strike={strikeDollars} />
+        </div>
+      )}
+    </Link>
+  );
+}
+
+function Field({
+  label,
+  value,
+  align = "left",
+}: {
+  label: string;
+  value: string;
+  align?: "left" | "right";
+}) {
+  return (
+    <div style={{ textAlign: align }}>
+      <div style={{ fontSize: 11, color: "var(--text-3)" }}>{label}</div>
+      <div className="num" style={{ fontSize: 15, fontWeight: 500, marginTop: 2 }}>
+        {value}
       </div>
     </div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Settled position card — winner (reassuring redeem) or honest "didn't win".
+// ---------------------------------------------------------------------------
+function SettledPositionCard({ p, onRedeem }: { p: Position; onRedeem: () => void }) {
+  const ticker = p.market.ticker as Ticker;
+  const sideUp = p.side === "yes";
+  const won = p.market.outcome === p.side;
+  const payout = won ? p.quantity : 0;
+  const cost = p.entryPrice != null ? (p.entryPrice * p.quantity) / 100 : null;
+  const pnl = cost != null ? payout - cost : null;
+  const strikeDollars = p.market.strike / 100;
+  const close =
+    p.market.settlementPrice != null ? p.market.settlementPrice / 100 : null;
+  const date = p.market.settlementTs
+    ? new Date(p.market.settlementTs * 1000).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+      })
+    : null;
+
+  return (
+    <Card style={{ padding: 18, display: "flex", flexDirection: "column" }}>
+      {/* Title + outcome */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 10,
+        }}
+      >
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, color: "var(--text)", lineHeight: 1.3 }}>
+            {ticker} above ${strikeDollars.toFixed(2)}?
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 3 }}>
+            Your bet: {sideUp ? "Yes" : "No"}
+            {date ? ` · settled ${date}` : ""}
+            {close != null ? ` · closed ${fmt$(close)}` : ""}
+          </div>
+        </div>
+        {won ? (
+          <span
+            className="pill up"
+            style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4 }}
+          >
+            <IconCheckCircle size={12} /> Won
+          </span>
+        ) : (
+          <span
+            className="pill"
+            style={{
+              flexShrink: 0,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              color: "var(--text-3)",
+            }}
+          >
+            <IconXCircle size={12} /> Didn&apos;t win
+          </span>
+        )}
+      </div>
+
+      {/* Result line + action */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginTop: 14,
+          paddingTop: 14,
+          borderTop: "1px solid var(--line-soft)",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 11, color: "var(--text-3)" }}>
+            {won ? "Your result" : "Outcome"}
+          </div>
+          {pnl != null ? (
+            <div
+              className={pnl >= 0 ? "up" : "dn"}
+              style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 2 }}
+            >
+              <span style={{ fontSize: 12, fontWeight: 600 }}>
+                {pnl >= 0 ? "Profit" : "Loss"}
+              </span>
+              <span className="num" style={{ fontSize: 16, fontWeight: 600 }}>
+                {pnl >= 0 ? "+" : "−"}
+                {fmt$(Math.abs(pnl))}
+              </span>
+            </div>
+          ) : (
+            <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 2 }}>
+              No cost basis on chain
+            </div>
+          )}
+        </div>
+
+        {won ? (
+          <button
+            type="button"
+            className="btn primary"
+            onClick={onRedeem}
+            aria-label={`Redeem ${p.quantity} winning shares for ${fmt$(p.quantity)}`}
+          >
+            Redeem {fmt$(p.quantity)}
+          </button>
+        ) : null}
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Spot vs strike mini — calm position marker on a strike-centered track.
+// ---------------------------------------------------------------------------
+function SpotStrikeMini({ spot, strike }: { spot: number; strike: number }) {
+  const range = Math.max(Math.abs(spot - strike) * 4, strike * 0.05);
+  const lo = strike - range;
+  const hi = strike + range;
+  const t = Math.max(0.04, Math.min(0.96, (spot - lo) / (hi - lo)));
+  return (
+    <div
+      style={{
+        position: "relative",
+        height: 6,
+        background: "var(--bg-elev-2)",
+        borderRadius: 3,
+        overflow: "visible",
+      }}
+    >
+      {/* strike line (center) */}
+      <div
+        style={{
+          position: "absolute",
+          left: "50%",
+          top: -2,
+          bottom: -2,
+          width: 1.5,
+          background: "var(--accent)",
+        }}
+      />
+      {/* spot marker */}
+      <div
+        style={{
+          position: "absolute",
+          left: `${t * 100}%`,
+          top: -3,
+          transform: "translateX(-50%)",
+          width: 8,
+          height: 12,
+          background: "var(--text)",
+          borderRadius: 2,
+        }}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Realized P&L curve — REAL cumulative realized P&L from settled positions
+// (known basis), ordered by settlement time. No synthesis: <2 points → empty.
+// ---------------------------------------------------------------------------
 function PnlCurve({ settled }: { settled: Position[] }) {
-  // REAL cumulative realized-P&L curve from settled positions (with known
-  // basis), ordered by settlement time. No synthesis: if there aren't at least
-  // two settled data points we render an explicit empty state.
   const data = useMemo(() => {
     const points = settled
       .filter((p) => p.entryPrice != null && p.market.settlementTs != null)
@@ -756,14 +860,14 @@ function PnlCurve({ settled }: { settled: Position[] }) {
     return (
       <div
         style={{
-          padding: 24,
+          padding: 20,
           textAlign: "center",
           color: "var(--text-3)",
-          fontSize: 12,
-          fontFamily: "var(--mono)",
+          fontSize: 12.5,
         }}
       >
-        Not enough settled history to chart P&amp;L yet.
+        Not enough settled history to chart yet — this fills in as more of your
+        positions settle.
       </div>
     );
   }
@@ -782,7 +886,11 @@ function PnlCurve({ settled }: { settled: Position[] }) {
   const positive = last >= 0;
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: H }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        style={{ width: "100%", height: H }}
+      >
         <defs>
           <linearGradient id="pnlfill" x1="0" y1="0" x2="0" y2="1">
             <stop
@@ -817,21 +925,26 @@ function PnlCurve({ settled }: { settled: Position[] }) {
         style={{
           display: "flex",
           justifyContent: "space-between",
-          marginTop: 4,
-          fontFamily: "var(--mono)",
-          fontSize: 11,
+          alignItems: "baseline",
+          marginTop: 8,
+          fontSize: 12,
           color: "var(--text-3)",
         }}
       >
-        <span>realized (settled)</span>
-        <span className={positive ? "up" : "dn"}>
-          {positive ? "+" : ""}${last.toFixed(0)}
+        <span>Total realized</span>
+        <span className={positive ? "up" : "dn"} style={{ fontWeight: 600 }}>
+          <span className="num">
+            {positive ? "+" : "−"}${Math.abs(last).toFixed(2)}
+          </span>
         </span>
       </div>
     </div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Connect-wallet empty state.
+// ---------------------------------------------------------------------------
 function EmptyState({
   title,
   desc,
@@ -848,7 +961,7 @@ function EmptyState({
       style={{
         padding: "80px 32px",
         border: "1px dashed var(--line-soft)",
-        borderRadius: 12,
+        borderRadius: "var(--r-lg)",
         textAlign: "center",
         background: "var(--bg-elev)",
       }}
@@ -857,9 +970,10 @@ function EmptyState({
       <h3 style={{ marginTop: 18, marginBottom: 8 }}>{title}</h3>
       <p
         style={{
-          fontSize: 13,
+          fontSize: 13.5,
           color: "var(--text-3)",
-          maxWidth: 380,
+          lineHeight: 1.6,
+          maxWidth: 400,
           margin: "0 auto 20px",
         }}
       >
