@@ -5,15 +5,10 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import {
-  Card,
   IconClock,
-  IconPyth,
-  IconRefresh,
   IconRight,
   IconSearch,
-  Label,
   Seg,
-  StrikePill,
   fmt$,
 } from "@/components/caret";
 import { MarketStatusChip } from "@/components/MarketStatusChip";
@@ -27,7 +22,6 @@ import {
 import { pickRedirectStrike } from "@/lib/trade-redirect";
 import { useMounted } from "@/lib/use-mounted";
 import { MAG7_TICKERS, TICKER_NAME, type Ticker } from "@/lib/tickers";
-import type { Market } from "@meridian/types";
 
 /** Closest strike to a real spot (cents); null when either is unavailable. */
 function atmFromRows(rows: StrikeRow[], spotCents: number | null): number | null {
@@ -44,7 +38,7 @@ function atmFromRows(rows: StrikeRow[], spotCents: number | null): number | null
   return best;
 }
 
-type View = "grid" | "list" | "heatmap";
+type View = "cards" | "list";
 
 /**
  * Markets — REAL on-chain data only.
@@ -53,24 +47,22 @@ type View = "grid" | "list" | "heatmap";
  * (on-chain OracleAccount) and strike chains from `useStrikeList()` (derived
  * from real markets + real order-book mids). No mock spot / change / strikes.
  *
- * Three view modes: Grid / List / Heat.
+ * Approachable-retail browse: one calm default (per-ticker groups, each a
+ * legible Yes/No strike ladder), with a Compact list as the alternate view.
  */
 export default function MarketsPage() {
-  const [view, setView] = useState<View>("grid");
+  const [view, setView] = useState<View>("cards");
   const [search, setSearch] = useState("");
-  const [refreshKey, setRefreshKey] = useState(0);
-  void refreshKey;
   const mounted = useMounted();
 
   const { markets } = useAllMarkets();
 
   // Static per-stock metadata (no synthesized prices). Spot + strikes are read
-  // live inside each card via real hooks.
+  // live inside each group via real hooks.
   const stocks = useMemo<StockRow[]>(() => {
     return MAG7_TICKERS.map((t) => ({
       sym: t,
       name: TICKER_NAME[t],
-      sector: sectorFor(t),
     }));
   }, []);
 
@@ -86,85 +78,87 @@ export default function MarketsPage() {
 
   const sorted = [...filtered].sort((a, b) => a.sym.localeCompare(b.sym));
 
+  const activeStrikes = markets.filter((m) => !m.settled).length;
+  const todayLabel = mounted
+    ? new Date().toLocaleDateString("en-US", {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      })
+    : "";
+
   return (
     <div className="page">
-      {/* HEADER */}
-      <div
+      {/* ───────────────────────── HEADER ─────────────────────────
+          Plain, calm intro: one title, one supporting line, the live
+          market-status chip. No uppercase eyebrow, no dense metadata. */}
+      <header
         style={{
           display: "flex",
           alignItems: "flex-end",
           justifyContent: "space-between",
-          marginBottom: 24,
           flexWrap: "wrap",
-          gap: 12,
+          gap: 16,
+          marginBottom: 28,
         }}
       >
         <div>
-          <Label>
-            MAG7
-            {mounted
-              ? ` · ${new Date().toLocaleDateString("en-US", {
-                  weekday: "long",
-                  month: "short",
-                  day: "numeric",
-                })}`
-              : ""}
-          </Label>
-          <h2 style={{ marginTop: 6 }}>Markets</h2>
-          <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-3)" }}>
-            7 stocks · {markets.filter((m) => !m.settled).length || "—"} active
-            strikes · settles at 4:00 PM ET
-          </div>
+          <h2 style={{ marginBottom: 8 }}>Today&apos;s markets</h2>
+          <p style={{ fontSize: 14, color: "var(--text-3)", maxWidth: 520, lineHeight: 1.5 }}>
+            Pick a price for one of the 7 biggest tech stocks, then bet Yes or No
+            on where it closes. Every market settles today at 4:00 PM ET.
+          </p>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <MarketStatusChip />
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              fontFamily: "var(--mono)",
-              fontSize: 12,
-              color: "var(--text-3)",
-            }}
-          >
-            <IconClock size={12} />
-            <span>Settles at 4:00 PM ET</span>
-          </div>
+          {mounted && (
+            <span
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 12.5,
+                color: "var(--text-3)",
+              }}
+            >
+              <IconClock size={12} />
+              {todayLabel}
+            </span>
+          )}
         </div>
-      </div>
+      </header>
 
-      {/* TOOLBAR */}
+      {/* ───────────────────────── TOOLBAR ─────────────────────────
+          Search + a two-option view switch. Quiet, generous, wraps on
+          mobile instead of overflowing. */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
           gap: 12,
-          marginBottom: 20,
-          padding: "12px 14px",
-          background: "var(--bg-elev)",
-          borderRadius: 10,
-          border: "1px solid var(--line-soft)",
+          marginBottom: 24,
           flexWrap: "wrap",
         }}
       >
-        <div style={{ position: "relative", flex: 1, maxWidth: 360, minWidth: 200 }}>
+        <div style={{ position: "relative", flex: 1, minWidth: 200, maxWidth: 420 }}>
           <IconSearch
-            size={13}
+            size={14}
             style={{
               position: "absolute",
-              left: 12,
+              left: 13,
               top: "50%",
               transform: "translateY(-50%)",
               color: "var(--text-3)",
+              pointerEvents: "none",
             }}
           />
           <input
             className="field"
-            placeholder="Search MAG7 (AAPL, MSFT, …)"
+            placeholder="Search a stock (Apple, NVDA…)"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            style={{ paddingLeft: 34, height: 34 }}
+            aria-label="Search markets by stock name or ticker"
+            style={{ paddingLeft: 38, height: 40 }}
           />
         </div>
 
@@ -172,639 +166,541 @@ export default function MarketsPage() {
 
         <Seg
           options={[
-            { value: "grid" as View, label: "Grid" },
-            { value: "list" as View, label: "List" },
-            { value: "heatmap" as View, label: "Heat" },
+            { value: "cards" as View, label: "Browse" },
+            { value: "list" as View, label: "Compact" },
           ]}
           value={view}
           onChange={setView}
         />
-
-        <button
-          className="btn sm ghost"
-          title="Refresh"
-          onClick={() => setRefreshKey((k) => k + 1)}
-          type="button"
-        >
-          <IconRefresh size={13} />
-        </button>
       </div>
 
-      {/* CONTENT */}
-      {view === "grid" && (
+      {/* ───────────────────────── CONTENT ───────────────────────── */}
+      {sorted.length === 0 ? (
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(330px, 1fr))",
-            gap: 16,
+            padding: "64px 24px",
+            textAlign: "center",
+            color: "var(--text-3)",
+            fontSize: 14,
+            border: "1px dashed var(--line-soft)",
+            borderRadius: "var(--r-lg)",
           }}
         >
+          No stocks match &ldquo;{search}&rdquo;.
+        </div>
+      ) : view === "cards" ? (
+        <div className="stack" style={{ gap: 16 }}>
           {sorted.map((s) => (
-            <StockCard key={s.sym} stock={s} />
+            <StockGroup key={s.sym} stock={s} />
+          ))}
+        </div>
+      ) : (
+        <div className="stack" style={{ gap: 14 }}>
+          {sorted.map((s) => (
+            <CompactRow key={s.sym} stock={s} />
           ))}
         </div>
       )}
 
-      {view === "list" && (
-        <Card padding={0} style={{ overflow: "hidden" }}>
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Ticker</th>
-                <th style={{ textAlign: "right" }}>Spot</th>
-                <th style={{ textAlign: "right" }}>Δ</th>
-                <th style={{ textAlign: "left", paddingLeft: 24 }}>
-                  Strike chain
-                </th>
-                <th style={{ textAlign: "right" }}>24h vol</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((s) => (
-                <StockListRow key={s.sym} stock={s} />
-              ))}
-            </tbody>
-          </table>
-        </Card>
+      {activeStrikes > 0 && (
+        <p
+          style={{
+            marginTop: 28,
+            fontSize: 12.5,
+            color: "var(--text-4)",
+            textAlign: "center",
+          }}
+        >
+          {activeStrikes} price{activeStrikes === 1 ? "" : "s"} open across 7 stocks ·
+          all settle at 4:00 PM ET
+        </p>
       )}
-
-      {view === "heatmap" && <Heatmap stocks={sorted} markets={markets} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Stock card (grid view)
+// Shared per-ticker data hook — keeps the same real reads the page always used.
 // ---------------------------------------------------------------------------
 interface StockRow {
   sym: Ticker;
   name: string;
-  sector: string;
 }
 
-function StockCard({ stock }: { stock: StockRow }) {
-  const router = useRouter();
-  const { rows: activeChain, loading: chainLoading } = useStrikeList(stock.sym);
-  const { rows: settledChain } = useResolvedStrikeList(stock.sym);
-  const { spotUsd } = useSpotPrice(stock.sym);
+function useStockData(sym: Ticker) {
+  const { rows: activeChain, loading: chainLoading } = useStrikeList(sym);
+  const { rows: settledChain } = useResolvedStrikeList(sym);
+  const { spotUsd } = useSpotPrice(sym);
   const spotCents = spotUsd != null ? Math.round(spotUsd * 100) : null;
   // After the close the active chain is empty; fall back to settled (read-only)
-  // strikes so the card still shows resolved outcomes instead of only spot.
+  // strikes so the group still shows resolved outcomes instead of only spot.
   const resolvedView = activeChain.length === 0 && settledChain.length > 0;
   const chain = resolvedView ? settledChain : activeChain;
   const atm = atmFromRows(chain, spotCents);
   // Real volume = sum of observed OrderMatched fills across this ticker's
-  // strikes; 0 until any fill is seen (settled rows carry no live volume).
+  // strikes (settled rows carry no live volume).
   const totalVol = chain.reduce((sum, c) => sum + c.volume, 0);
-  // Link to a REAL strike: ATM active, else ATM settled, else /markets — reuse
-  // the same pure decision the redirect page uses so they never disagree.
+  // Link to a REAL strike: ATM active → ATM settled → /markets, via the shared
+  // helper the redirect page uses so they never disagree.
   const redirectTarget = pickRedirectStrike(
     activeChain.map((c) => c.strike),
     settledChain.map((c) => c.strike),
     spotCents,
   );
-  const href = redirectTarget != null
-    ? `/trade/${stock.sym}/${redirectTarget}`
-    : "/markets";
+  const href =
+    redirectTarget != null ? `/trade/${sym}/${redirectTarget}` : "/markets";
 
-  return (
-    <div
-      role="link"
-      tabIndex={0}
-      onClick={() => router.push(href)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") router.push(href);
-      }}
-      style={{ textDecoration: "none", display: "block", cursor: "pointer" }}
-    >
-      <div
-        className="card"
-        style={{
-          padding: 18,
-          transition: "border-color .15s, transform .15s",
-          cursor: "pointer",
-          height: "100%",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.borderColor = "var(--line-strong)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.borderColor = "var(--line-soft)";
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            marginBottom: 14,
-          }}
-        >
-          <div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                gap: 8,
-                marginBottom: 2,
-              }}
-            >
-              <span style={{ fontSize: 17, fontWeight: 600, letterSpacing: "-0.01em" }}>
-                {stock.sym}
-              </span>
-              <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-                {stock.name}
-              </span>
-            </div>
-            <span
-              style={{
-                fontSize: 10.5,
-                fontFamily: "var(--mono)",
-                letterSpacing: "0.08em",
-                textTransform: "uppercase",
-                color: "var(--text-4)",
-              }}
-            >
-              {stock.sector}
-            </span>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "flex-end", flexDirection: "column", gap: 4 }}>
-            <span className="num" style={{ fontSize: 19, fontWeight: 500 }}>
-              {spotUsd != null ? fmt$(spotUsd) : "—"}
-            </span>
-            <span style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--text-4)" }}>
-              oracle spot
-            </span>
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "10px 0",
-            borderTop: "1px solid var(--line-soft)",
-            borderBottom: "1px solid var(--line-soft)",
-          }}
-        >
-          <span
-            style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--text-3)" }}
-          >
-            VOL{" "}
-            <span style={{ color: "var(--text-2)" }}>
-              {totalVol > 0 ? totalVol.toLocaleString() : "—"}
-            </span>
-          </span>
-          <div style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--text-3)" }}>
-            {chainLoading && chain.length === 0 ? (
-              <span style={{ color: "var(--text-3)" }}>loading…</span>
-            ) : (
-              <>
-                <span style={{ color: "var(--text-2)" }}>{chain.length}</span>{" "}
-                {resolvedView ? "resolved" : "strikes"}
-              </>
-            )}
-          </div>
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: `repeat(${Math.max(chain.length, 1)}, 1fr)`,
-              gap: 4,
-            }}
-          >
-            {chain.map((c) => {
-              const isAtm = c.strike === atm;
-              // Resolved cell: show the winning side label + frozen close, not a
-              // live mid. "Awaiting" when expired but not yet settled.
-              const resolved = c.status === "resolved" && c.outcome != null;
-              const awaiting = c.status === "expired";
-              const winner = Math.max(c.yesCents, c.noCents);
-              const winnerSide = c.yesCents > c.noCents ? "up" : "down";
-              return (
-                <Link
-                  key={c.strike}
-                  href={`/trade/${stock.sym}/${c.strike}`}
-                  onClick={(e) => e.stopPropagation()}
-                  className="row-hover"
-                  style={{
-                    padding: "6px 2px",
-                    background: isAtm ? "var(--accent-soft)" : "var(--bg-elev-2)",
-                    border: isAtm
-                      ? "1px solid var(--accent-line)"
-                      : "1px solid var(--line-soft)",
-                    borderRadius: 5,
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: 2,
-                    fontFamily: "var(--mono)",
-                    cursor: "pointer",
-                    textDecoration: "none",
-                    color: "var(--text)",
-                  }}
-                  title={
-                    resolved
-                      ? `Resolved · ${c.outcome === "yes" ? "Yes" : "No"} won`
-                      : awaiting
-                        ? "Awaiting settlement"
-                        : undefined
-                  }
-                >
-                  <span style={{ fontSize: 10, color: "var(--text-3)" }}>
-                    ${(c.strike / 100).toFixed(0)}
-                  </span>
-                  {resolved ? (
-                    <span
-                      style={{
-                        fontSize: 10,
-                        color: `var(--${c.outcome === "yes" ? "up" : "down"})`,
-                        fontWeight: 600,
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {c.outcome} ✓
-                    </span>
-                  ) : awaiting ? (
-                    <span style={{ fontSize: 9, color: "var(--text-3)" }}>settling…</span>
-                  ) : (
-                    <span
-                      style={{
-                        fontSize: 11,
-                        color: `var(--${winnerSide})`,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {winner}¢
-                    </span>
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        </div>
-
-        <div
-          style={{
-            marginTop: 14,
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            fontSize: 11,
-            fontFamily: "var(--mono)",
-            color: "var(--text-3)",
-          }}
-        >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <IconPyth size={11} /> {stock.sym}/USD
-          </span>
-          <span>
-            VOL{" "}
-            <span style={{ color: "var(--text-2)" }}>
-              {totalVol > 0 ? totalVol.toLocaleString() : "—"}
-            </span>
-          </span>
-        </div>
-      </div>
-    </div>
-  );
+  return {
+    spotUsd,
+    chain,
+    chainLoading,
+    resolvedView,
+    atm,
+    totalVol,
+    href,
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Stock list row
+// Stock group (default "Browse" view) — a ticker header over a legible
+// Yes/No/Volume strike ladder. Each ladder row is an obvious click into trade.
 // ---------------------------------------------------------------------------
-function StockListRow({ stock }: { stock: StockRow }) {
-  const { rows: activeChain } = useStrikeList(stock.sym);
-  const { rows: settledChain } = useResolvedStrikeList(stock.sym);
-  const { spotUsd } = useSpotPrice(stock.sym);
-  const spotCents = spotUsd != null ? Math.round(spotUsd * 100) : null;
-  // After the close show settled (read-only) strikes instead of just spot.
-  const resolvedView = activeChain.length === 0 && settledChain.length > 0;
-  const chain = resolvedView ? settledChain : activeChain;
-  const atm = atmFromRows(chain, spotCents);
-  const totalVol = chain.reduce((sum, c) => sum + c.volume, 0);
-  // Real strike target (ATM active → ATM settled → /markets), shared helper.
-  const redirectTarget = pickRedirectStrike(
-    activeChain.map((c) => c.strike),
-    settledChain.map((c) => c.strike),
-    spotCents,
-  );
-  const navTarget = redirectTarget != null
-    ? `/trade/${stock.sym}/${redirectTarget}`
-    : "/markets";
+function StockGroup({ stock }: { stock: StockRow }) {
+  const router = useRouter();
+  const { spotUsd, chain, chainLoading, resolvedView, atm, totalVol, href } =
+    useStockData(stock.sym);
+
+  // Show a focused window of the ladder around the at-the-money price so the
+  // group stays scannable; expand reveals the full chain.
+  const [expanded, setExpanded] = useState(false);
+  const ladder = useMemo(() => orderForLadder(chain, atm), [chain, atm]);
+  const visible = expanded ? ladder : windowAroundAtm(ladder, atm, 5);
+  const hiddenCount = ladder.length - visible.length;
 
   return (
-    <tr
-      className="row-hover"
-      style={{ cursor: "pointer" }}
-      onClick={() => {
-        window.location.href = navTarget;
-      }}
-    >
-      <td>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 500 }}>{stock.sym}</div>
-            <div style={{ fontSize: 11, color: "var(--text-3)" }}>{stock.name}</div>
-          </div>
-        </div>
-      </td>
-      <td style={{ textAlign: "right", fontFamily: "var(--mono)" }}>
-        {spotUsd != null ? fmt$(spotUsd) : "—"}
-      </td>
-      <td
-        style={{ textAlign: "right", fontFamily: "var(--mono)", color: "var(--text-4)" }}
-      >
-        —
-      </td>
-      <td style={{ paddingLeft: 24 }}>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {chain.map((c) => {
-            const isAtm = c.strike === atm;
-            const resolved = c.status === "resolved" && c.outcome != null;
-            const awaiting = c.status === "expired";
-            const winner = Math.max(c.yesCents, c.noCents);
-            const winnerSide = c.yesCents > c.noCents ? "up" : "down";
-            return (
-              <Link
-                key={c.strike}
-                href={`/trade/${stock.sym}/${c.strike}`}
-                onClick={(e) => e.stopPropagation()}
-                title={
-                  resolved
-                    ? `Resolved · ${c.outcome === "yes" ? "Yes" : "No"} won`
-                    : awaiting
-                      ? "Awaiting settlement"
-                      : undefined
-                }
-                style={{
-                  padding: "5px 8px",
-                  background: isAtm ? "var(--accent-soft)" : "var(--bg-elev-2)",
-                  border: isAtm
-                    ? "1px solid var(--accent-line)"
-                    : "1px solid transparent",
-                  borderRadius: 5,
-                  fontFamily: "var(--mono)",
-                  fontSize: 11,
-                  color: "var(--text)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  minWidth: 56,
-                  textDecoration: "none",
-                }}
-              >
-                <span style={{ color: "var(--text-3)", fontSize: 10 }}>
-                  {(c.strike / 100).toFixed(0)}
-                </span>
-                {resolved ? (
-                  <span
-                    style={{
-                      color: `var(--${c.outcome === "yes" ? "up" : "down"})`,
-                      fontWeight: 600,
-                      textTransform: "uppercase",
-                      fontSize: 10,
-                    }}
-                  >
-                    {c.outcome} ✓
-                  </span>
-                ) : awaiting ? (
-                  <span style={{ color: "var(--text-3)", fontSize: 9 }}>settling…</span>
-                ) : (
-                  <span
-                    style={{
-                      color: `var(--${winnerSide})`,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {winner}¢
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </div>
-      </td>
-      <td style={{ textAlign: "right", fontFamily: "var(--mono)" }}>
-        {totalVol > 0 ? totalVol.toLocaleString() : "—"}
-      </td>
-      <td style={{ textAlign: "right", paddingRight: 18 }}>
-        <IconRight size={14} style={{ color: "var(--text-3)" }} />
-      </td>
-    </tr>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Heatmap
-// ---------------------------------------------------------------------------
-function Heatmap({
-  stocks,
-  markets,
-}: {
-  stocks: StockRow[];
-  markets: Market[];
-}) {
-  const buckets = ["−9%", "−6%", "−3%", "Close", "+3%", "+6%", "+9%"];
-  const pcts = [-0.09, -0.06, -0.03, 0, 0.03, 0.06, 0.09];
-
-  return (
-    <Card padding={0} style={{ overflow: "hidden" }}>
+    <section className="card" style={{ padding: 0, overflow: "hidden" }}>
+      {/* Group header — ticker, plain name, live spot. Clickable into the
+          at-the-money market (keyboard-accessible). */}
       <div
+        role="link"
+        tabIndex={0}
+        aria-label={`Open ${stock.name} at the closest price to spot`}
+        onClick={() => router.push(href)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            router.push(href);
+          }
+        }}
+        className="row-hover"
         style={{
-          padding: "12px 20px",
-          borderBottom: "1px solid var(--line-soft)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          gap: 16,
+          padding: "16px 18px",
+          cursor: "pointer",
           flexWrap: "wrap",
-          gap: 8,
         }}
       >
-        <span className="label">
-          Implied Yes % by ticker × strike offset
-        </span>
-        <span
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+          <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.01em" }}>
+            {stock.sym}
+          </span>
+          <span
+            style={{
+              fontSize: 13.5,
+              color: "var(--text-3)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {stock.name}
+          </span>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+          <div style={{ textAlign: "right" }}>
+            <div className="num" style={{ fontSize: 18, fontWeight: 500 }}>
+              {spotUsd != null ? fmt$(spotUsd) : "—"}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-4)" }}>
+              {resolvedView ? "closing price" : "trading now"}
+            </div>
+          </div>
+          <IconRight size={16} style={{ color: "var(--text-3)", flexShrink: 0 }} />
+        </div>
+      </div>
+
+      {/* Ladder header — plain language: Price, Yes, No, Activity. */}
+      {chain.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
+            padding: "8px 18px",
+            borderTop: "1px solid var(--line-soft)",
+            background: "var(--bg-elev-2)",
+            fontSize: 11,
+            fontWeight: 500,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+            color: "var(--text-3)",
+          }}
+        >
+          <span>Closes at or above</span>
+          <span style={{ textAlign: "right" }}>Yes</span>
+          <span style={{ textAlign: "right" }}>No</span>
+          <span style={{ textAlign: "right" }}>
+            {resolvedView ? "Result" : "Activity"}
+          </span>
+        </div>
+      )}
+
+      {/* Ladder body */}
+      {chain.length === 0 ? (
+        <div
+          style={{
+            padding: "28px 18px",
+            textAlign: "center",
+            color: "var(--text-3)",
+            fontSize: 13,
+            borderTop: "1px solid var(--line-soft)",
+          }}
+        >
+          {chainLoading ? "Loading prices…" : "No prices open right now."}
+        </div>
+      ) : (
+        <div>
+          {visible.map((c) => (
+            <LadderRow
+              key={c.strike}
+              ticker={stock.sym}
+              row={c}
+              isAtm={c.strike === atm}
+              resolvedView={resolvedView}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Footer — expand control + honest summary. */}
+      {chain.length > 0 && (
+        <div
           style={{
             display: "flex",
-            gap: 18,
-            fontSize: 11,
-            fontFamily: "var(--mono)",
-            color: "var(--text-3)",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            padding: "10px 18px",
+            borderTop: "1px solid var(--line-soft)",
             flexWrap: "wrap",
           }}
         >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{ width: 10, height: 10, borderRadius: 2, background: "var(--up)" }}
-            />{" "}
-            100% Yes
+          {hiddenCount > 0 ? (
+            <button
+              type="button"
+              className="btn sm ghost"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded ? "Show fewer prices" : `Show all ${ladder.length} prices`}
+            </button>
+          ) : (
+            <span />
+          )}
+          <span style={{ fontSize: 12, color: "var(--text-4)" }}>
+            {totalVol > 0
+              ? `${totalVol.toLocaleString()} shares traded today`
+              : resolvedView
+                ? "settled · 4:00 PM ET"
+                : "no trades yet today"}
           </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{
-                width: 10,
-                height: 10,
-                borderRadius: 2,
-                background: "var(--bg-elev-2)",
-              }}
-            />{" "}
-            50/50
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span
-              style={{ width: 10, height: 10, borderRadius: 2, background: "var(--down)" }}
-            />{" "}
-            100% No
-          </span>
-        </span>
-      </div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: `140px repeat(${buckets.length}, 1fr)`,
-          padding: 14,
-          gap: 4,
-        }}
-      >
-        <div />
-        {buckets.map((b) => (
-          <div
-            key={b}
-            style={{
-              textAlign: "center",
-              fontFamily: "var(--mono)",
-              fontSize: 11,
-              color: "var(--text-3)",
-              padding: "4px 0",
-            }}
-          >
-            {b}
-          </div>
-        ))}
-        {stocks.map((s) => (
-          <HeatmapRow key={s.sym} stock={s} pcts={pcts} markets={markets} />
-        ))}
-      </div>
-    </Card>
+        </div>
+      )}
+    </section>
   );
 }
 
-function HeatmapRow({
-  stock,
-  pcts,
-  markets,
+// ---------------------------------------------------------------------------
+// A single ladder row — strike (as "closes at or above $X"), Yes / No prices
+// in plain "chance" terms, and either live activity or the settled result.
+// ---------------------------------------------------------------------------
+function LadderRow({
+  ticker,
+  row,
+  isAtm,
+  resolvedView,
 }: {
-  stock: StockRow;
-  pcts: number[];
-  markets: Market[];
+  ticker: Ticker;
+  row: StrikeRow;
+  isAtm: boolean;
+  resolvedView: boolean;
 }) {
-  const { rows: chain } = useStrikeList(stock.sym);
-  const { spotUsd } = useSpotPrice(stock.sym);
-  // Anchor the ±% buckets to the REAL oracle spot (cents). Null until read.
-  const baseCents = spotUsd != null ? spotUsd * 100 : null;
-
-  function cellFor(idx: number) {
-    if (baseCents == null || chain.length === 0) {
-      return { strikeCents: 0, yes: undefined as number | undefined };
-    }
-    const targetCents = Math.round((baseCents * (1 + pcts[idx]!)) / 1000) * 1000;
-    // Find the strike closest to the targeted offset.
-    let best = chain[0];
-    let bestDist = Number.POSITIVE_INFINITY;
-    for (const c of chain) {
-      const d = Math.abs(c.strike - targetCents);
-      if (d < bestDist) {
-        best = c;
-        bestDist = d;
-      }
-    }
-    return { strikeCents: best?.strike ?? targetCents, yes: best?.yesCents };
-  }
-
-  // markets unused for color math (kept for signature parity with Heatmap).
-  void markets;
+  const resolved = row.status === "resolved" && row.outcome != null;
+  const awaiting = row.status === "expired";
+  const strikeUsd = row.strike / 100;
 
   return (
-    <>
-      <div style={{ padding: "12px 4px", display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontWeight: 500, fontSize: 13 }}>{stock.sym}</span>
-        <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-3)" }}>
-          {spotUsd != null ? fmt$(spotUsd) : "—"}
+    <Link
+      href={`/trade/${ticker}/${row.strike}`}
+      className="row-hover"
+      aria-label={`${ticker} closes at or above $${strikeUsd.toFixed(0)} — open this market`}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "1.4fr 1fr 1fr 1fr",
+        alignItems: "center",
+        padding: "11px 18px",
+        borderTop: "1px solid var(--line-soft)",
+        textDecoration: "none",
+        color: "var(--text)",
+        background: isAtm ? "var(--accent-soft)" : "transparent",
+      }}
+    >
+      {/* Price (the strike). The at-the-money row gets a quiet "near spot" cue
+          instead of the jargon "ATM". */}
+      <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <span className="num" style={{ fontSize: 15, fontWeight: isAtm ? 600 : 500 }}>
+          ${strikeUsd.toFixed(0)}
         </span>
-      </div>
-      {pcts.map((_, idx) => {
-        const cell = cellFor(idx);
-        if (cell.yes == null) {
-          return (
-            <div
-              key={idx}
-              style={{
-                background: "var(--bg-elev-2)",
-                opacity: 0.3,
-                borderRadius: 5,
-              }}
-            />
-          );
-        }
-        const t = cell.yes / 100;
-        const bg = `oklch(${0.32 + Math.abs(t - 0.5) * 0.18} ${
-          0.04 + Math.abs(t - 0.5) * 0.14
-        } ${t > 0.5 ? 158 : 25})`;
-        return (
-          <Link
-            key={idx}
-            href={`/trade/${stock.sym}/${cell.strikeCents}`}
+        {isAtm && (
+          <span
             style={{
-              background: bg,
-              border: 0,
-              borderRadius: 5,
-              padding: "12px 4px",
-              fontFamily: "var(--mono)",
-              color: "var(--text)",
-              cursor: "pointer",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 2,
-              textDecoration: "none",
+              fontSize: 10.5,
+              color: "var(--accent)",
+              fontWeight: 500,
+              whiteSpace: "nowrap",
             }}
           >
-            <span style={{ fontSize: 14, fontWeight: 600 }}>{cell.yes}¢</span>
-            <span style={{ fontSize: 10, color: "var(--text-3)" }}>
-              ${(cell.strikeCents / 100).toFixed(0)}
-            </span>
-          </Link>
-        );
-      })}
-    </>
+            near spot
+          </span>
+        )}
+      </span>
+
+      {resolved ? (
+        // Settled: show which side won across both price cells, frozen.
+        <>
+          <span style={{ textAlign: "right" }}>
+            <Outcome win={row.outcome === "yes"} label="Yes" />
+          </span>
+          <span style={{ textAlign: "right" }}>
+            <Outcome win={row.outcome === "no"} label="No" />
+          </span>
+          <span
+            style={{
+              textAlign: "right",
+              fontSize: 12,
+              color: "var(--text-3)",
+            }}
+          >
+            settled
+          </span>
+        </>
+      ) : awaiting ? (
+        <>
+          <span style={{ textAlign: "right", color: "var(--text-3)", fontSize: 13 }}>
+            —
+          </span>
+          <span style={{ textAlign: "right", color: "var(--text-3)", fontSize: 13 }}>
+            —
+          </span>
+          <span style={{ textAlign: "right", fontSize: 12, color: "var(--text-3)" }}>
+            settling…
+          </span>
+        </>
+      ) : (
+        <>
+          <ChanceCell cents={row.yesCents} tone="up" estimated={row.estimated} />
+          <ChanceCell cents={row.noCents} tone="down" estimated={row.estimated} />
+          <span
+            style={{
+              textAlign: "right",
+              fontSize: 12.5,
+              fontFamily: "var(--mono)",
+              color: "var(--text-3)",
+            }}
+          >
+            {row.volume > 0 ? row.volume.toLocaleString() : "—"}
+          </span>
+        </>
+      )}
+    </Link>
+  );
+}
+
+/** A live Yes/No price shown as a plain "chance" (cent == percent). The "~"
+ *  marks an estimate when there's no resting book. */
+function ChanceCell({
+  cents,
+  tone,
+  estimated,
+}: {
+  cents: number;
+  tone: "up" | "down";
+  estimated: boolean;
+}) {
+  return (
+    <span
+      style={{
+        textAlign: "right",
+        display: "inline-flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        lineHeight: 1.2,
+      }}
+    >
+      <span
+        className="num"
+        style={{ fontSize: 15, fontWeight: 600, color: `var(--${tone})` }}
+      >
+        {estimated ? "~" : ""}
+        {cents}¢
+      </span>
+      <span style={{ fontSize: 10.5, color: "var(--text-4)" }}>
+        {estimated ? "est. chance" : `${cents}% chance`}
+      </span>
+    </span>
+  );
+}
+
+/** A settled outcome chip — winning side in color, losing side muted. */
+function Outcome({ win, label }: { win: boolean; label: string }) {
+  return (
+    <span
+      className="num"
+      style={{
+        fontSize: 13,
+        fontWeight: 600,
+        color: win ? `var(--${label === "Yes" ? "up" : "down"})` : "var(--text-4)",
+      }}
+    >
+      {win ? `${label} won` : label}
+    </span>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Sector lookup (display only — for the StockCard subtitle).
+// Compact list row — one line per stock for fast scanning: ticker, spot, and
+// the Yes price for the at-the-money market with a chance bar. Whole row clicks
+// into trade.
 // ---------------------------------------------------------------------------
-function sectorFor(t: Ticker): string {
-  switch (t) {
-    case "AAPL":
-    case "MSFT":
-    case "GOOGL":
-    case "META":
-      return "Tech";
-    case "AMZN":
-      return "Consumer";
-    case "NVDA":
-      return "Semis";
-    case "TSLA":
-      return "Auto";
-  }
+function CompactRow({ stock }: { stock: StockRow }) {
+  const { spotUsd, chain, resolvedView, atm, totalVol, href } = useStockData(
+    stock.sym,
+  );
+  const atmRow = chain.find((c) => c.strike === atm) ?? null;
+  const yes = atmRow?.yesCents ?? null;
+
+  return (
+    <Link
+      href={href}
+      className="card row-hover"
+      aria-label={`${stock.name} — open the market closest to spot`}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(0,1.4fr) auto minmax(120px,1.2fr)",
+        alignItems: "center",
+        gap: 16,
+        padding: "14px 18px",
+        textDecoration: "none",
+        color: "var(--text)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
+        <span style={{ fontSize: 16, fontWeight: 600 }}>{stock.sym}</span>
+        <span
+          style={{
+            fontSize: 13,
+            color: "var(--text-3)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {stock.name}
+        </span>
+      </div>
+
+      <div style={{ textAlign: "right" }}>
+        <div className="num" style={{ fontSize: 15, fontWeight: 500 }}>
+          {spotUsd != null ? fmt$(spotUsd) : "—"}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-4)" }}>
+          {totalVol > 0
+            ? `${totalVol.toLocaleString()} traded`
+            : resolvedView
+              ? "settled"
+              : "no trades yet"}
+        </div>
+      </div>
+
+      {/* At-the-money chance, as a quiet bar + label. Honest "—" when no book. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "flex-end" }}>
+        {yes != null && !resolvedView ? (
+          <>
+            <div
+              aria-hidden
+              style={{
+                flex: 1,
+                maxWidth: 90,
+                height: 6,
+                borderRadius: 999,
+                background: "var(--bg-elev-2)",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  width: `${Math.max(0, Math.min(100, yes))}%`,
+                  height: "100%",
+                  background: "var(--up)",
+                  opacity: 0.85,
+                }}
+              />
+            </div>
+            <span
+              className="num"
+              style={{ fontSize: 14, fontWeight: 600, color: "var(--up)", minWidth: 56, textAlign: "right" }}
+            >
+              {atmRow?.estimated ? "~" : ""}
+              {yes}% Yes
+            </span>
+          </>
+        ) : (
+          <span style={{ fontSize: 13, color: "var(--text-3)" }}>
+            {resolvedView ? "settled" : "—"}
+          </span>
+        )}
+        <IconRight size={15} style={{ color: "var(--text-3)", flexShrink: 0 }} />
+      </div>
+    </Link>
+  );
 }
 
-// Tiny ack to keep StrikePill import alive for future ATM-badge work
-// without triggering unused-import lint.
-void StrikePill;
+// ---------------------------------------------------------------------------
+// Ladder ordering helpers (display only — no data synthesis).
+// ---------------------------------------------------------------------------
+
+/** Sort strikes high→low so the ladder reads like a price ladder. */
+function orderForLadder(chain: StrikeRow[], _atm: number | null): StrikeRow[] {
+  void _atm;
+  return [...chain].sort((a, b) => b.strike - a.strike);
+}
+
+/** A centered window of `±half` rows around the at-the-money strike, keeping the
+ *  ladder scannable. Falls back to the head of the ladder when spot is unknown. */
+function windowAroundAtm(
+  ladder: StrikeRow[],
+  atm: number | null,
+  half: number,
+): StrikeRow[] {
+  if (ladder.length <= half * 2 + 1) return ladder;
+  let center = 0;
+  if (atm != null) {
+    const idx = ladder.findIndex((r) => r.strike === atm);
+    if (idx >= 0) center = idx;
+  }
+  const start = Math.max(0, Math.min(center - half, ladder.length - (half * 2 + 1)));
+  return ladder.slice(start, start + half * 2 + 1);
+}
