@@ -141,7 +141,7 @@ export default function AdminPage() {
   return (
     <div className="page">
       {/* HEADER */}
-      <div
+      <header
         style={{
           display: "flex",
           alignItems: "flex-end",
@@ -161,11 +161,11 @@ export default function AdminPage() {
                 color: "var(--accent)",
               }}
             >
-              <IconBolt size={11} /> DEV TOOLS · ADMIN
+              <IconBolt size={11} aria-hidden /> Operator tools
             </span>
           </Label>
           <h2 style={{ marginTop: 6 }}>Operator Console</h2>
-          <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-3)" }}>
+          <div style={{ marginTop: 6, fontSize: 13, color: "var(--text-3)", maxWidth: 640 }}>
             Drive the on-chain lifecycle — oracle, settlement, market creation,
             pause. All actions are real transactions signed by your wallet.
           </div>
@@ -174,16 +174,22 @@ export default function AdminPage() {
           {config && (
             <Pill tone={config.paused ? "dn" : "up"}>
               <span className="dot" />
-              {config.paused ? "PAUSED" : "ACTIVE"}
+              {config.paused ? "Paused" : "Active"}
             </Pill>
           )}
-          <Button sm ghost onClick={refreshAll} leftIcon={<IconRefresh size={13} />}>
+          <Button
+            sm
+            ghost
+            onClick={refreshAll}
+            leftIcon={<IconRefresh size={13} aria-hidden />}
+            aria-label="Refresh on-chain reads"
+          >
             Refresh
           </Button>
         </div>
-      </div>
+      </header>
 
-      {/* 1. STATUS BANNER */}
+      {/* STATUS BANNER */}
       <StatusBanner
         connected={connected}
         myKey={myKey}
@@ -194,9 +200,11 @@ export default function AdminPage() {
         onConnect={() => walletModal.setVisible(true)}
       />
 
-      <div style={{ height: 18 }} />
-
-      {/* 2. ORACLE CONTROL */}
+      {/* ── ORACLE ───────────────────────────────────────────────── */}
+      <GroupHeading
+        title="Oracle"
+        purpose="On-chain settlement prices per ticker. Settlement reads these — keep them fresh."
+      />
       <OracleControl
         oracles={oracles}
         canPush={connected}
@@ -256,9 +264,11 @@ export default function AdminPage() {
         }}
       />
 
-      <div style={{ height: 18 }} />
-
-      {/* 3. SETTLEMENT CONTROL */}
+      {/* ── MARKETS ──────────────────────────────────────────────── */}
+      <GroupHeading
+        title="Markets"
+        purpose="Create today's strike grid, then settle each market against the oracle close after expiry."
+      />
       <SettlementControl
         markets={markets}
         canSettle={connected}
@@ -275,9 +285,9 @@ export default function AdminPage() {
         }}
       />
 
-      <div style={{ height: 18 }} />
+      <div style={{ height: 16 }} />
 
-      {/* 4. MARKET CREATION */}
+      {/* MARKET CREATION */}
       <MarketCreation
         markets={markets}
         oracles={oracles}
@@ -295,9 +305,11 @@ export default function AdminPage() {
         }}
       />
 
-      <div style={{ height: 18 }} />
-
-      {/* 4b. SYNTHETIC STRIKE — single arbitrary strike, future expiry (after-hours) */}
+      {/* ── STRIKES ──────────────────────────────────────────────── */}
+      <GroupHeading
+        title="Strikes"
+        purpose="Add a single arbitrary strike at the next trading day's close — useful after today's market is closed."
+      />
       <SyntheticStrikeControl
         oracles={oracles}
         canCreate={connected}
@@ -314,9 +326,12 @@ export default function AdminPage() {
         }}
       />
 
-      <div style={{ height: 18 }} />
-
-      {/* 5. PAUSE / UNPAUSE */}
+      {/* ── DANGER ZONE ──────────────────────────────────────────── */}
+      <GroupHeading
+        title="Danger zone"
+        purpose="Global controls that affect every market. Confirm the current state before toggling."
+        tone="danger"
+      />
       <PauseControl
         config={config}
         canToggle={connected}
@@ -330,6 +345,39 @@ export default function AdminPage() {
           }
         }}
       />
+    </div>
+  );
+}
+
+// ===========================================================================
+// Group heading — scannable section divider for the operator
+// ===========================================================================
+
+function GroupHeading({
+  title,
+  purpose,
+  tone,
+}: {
+  title: string;
+  purpose: string;
+  tone?: "danger";
+}) {
+  const danger = tone === "danger";
+  return (
+    <div style={{ marginTop: 28, marginBottom: 12 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <h3 style={{ fontSize: 15, color: danger ? "var(--down)" : "var(--text)" }}>
+          {title}
+        </h3>
+        {danger && (
+          <Pill tone="dn">
+            <IconAlert size={11} aria-hidden /> Affects all markets
+          </Pill>
+        )}
+      </div>
+      <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--text-3)" }}>
+        {purpose}
+      </div>
     </div>
   );
 }
@@ -379,7 +427,7 @@ function StatusBanner({
   return (
     <Card style={{ borderColor, background: bg }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 14, flexWrap: "wrap" }}>
-        <div style={{ marginTop: 2, color: tone === "warn" ? "var(--down)" : tone === "ok" ? "var(--up)" : "var(--text-3)" }}>
+        <div aria-hidden style={{ marginTop: 2, color: tone === "warn" ? "var(--down)" : tone === "ok" ? "var(--up)" : "var(--text-3)" }}>
           {tone === "ok" ? <IconCheckCircle size={18} /> : tone === "warn" ? <IconAlert size={18} /> : <IconBolt size={18} />}
         </div>
         <div style={{ flex: 1, minWidth: 260 }}>
@@ -522,7 +570,7 @@ function OracleControl({
                 setPythBusy(false);
               }
             }}
-            leftIcon={<IconPyth size={13} />}
+            leftIcon={<IconPyth size={13} aria-hidden />}
           >
             {pythBusy ? "Pushing…" : "Refresh all from Pyth"}
           </Button>
@@ -609,7 +657,7 @@ function OracleRow({
       </div>
 
       <div style={{ minWidth: 150, display: "flex", alignItems: "center", gap: 6 }}>
-        <IconClock size={12} style={{ color: stale ? "var(--down)" : "var(--text-3)" }} />
+        <IconClock size={12} aria-hidden style={{ color: stale ? "var(--down)" : "var(--text-3)" }} />
         {exists ? (
           <span
             style={{
@@ -618,7 +666,7 @@ function OracleRow({
               color: stale ? "var(--down)" : "var(--up)",
             }}
           >
-            {oracle!.stalenessSec}s ago{stale ? " · STALE" : ""}
+            {oracle!.stalenessSec}s ago{stale ? " · stale" : ""}
           </span>
         ) : (
           <span style={{ fontSize: 12, color: "var(--text-4)" }}>—</span>
@@ -630,6 +678,7 @@ function OracleRow({
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <div style={{ position: "relative" }}>
           <span
+            aria-hidden
             style={{
               position: "absolute",
               left: 10,
@@ -644,6 +693,7 @@ function OracleRow({
           <input
             className="field"
             inputMode="decimal"
+            aria-label={`New ${ticker} price in dollars`}
             placeholder={exists ? priceUsd.toFixed(2) : "0.00"}
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -653,7 +703,13 @@ function OracleRow({
             style={{ width: 110, height: 32, paddingLeft: 22, fontFamily: "var(--mono)" }}
           />
         </div>
-        <Button sm primary disabled={!canPush || busy} onClick={() => void submit()}>
+        <Button
+          sm
+          primary
+          disabled={!canPush || busy}
+          onClick={() => void submit()}
+          aria-label={`Push new ${ticker} price`}
+        >
           {busy ? "…" : "Push price"}
         </Button>
       </div>
@@ -720,7 +776,7 @@ function SettlementControl({
             primary
             disabled={!canSettle || bulkBusy || openMarkets.length === 0}
             onClick={() => void settleAll()}
-            leftIcon={<IconBolt size={13} />}
+            leftIcon={<IconBolt size={13} aria-hidden />}
           >
             {bulkBusy ? "Settling…" : `Settle all open (${openMarkets.length})`}
           </Button>
@@ -851,6 +907,7 @@ function SettleRow({
         ) : (
           <Button
             sm
+            aria-label={`Settle ${market.ticker} $${(market.strike / 100).toFixed(2)} market`}
             disabled={!canSettle || working || disabledGlobal}
             onClick={async () => {
               setLocalBusy(true);
@@ -965,7 +1022,7 @@ function MarketCreation({
             primary
             disabled={!canCreate || busyTicker !== null}
             onClick={() => void createAll()}
-            leftIcon={<IconBolt size={13} />}
+            leftIcon={<IconBolt size={13} aria-hidden />}
           >
             {busyTicker === "all" || busyTicker !== null ? "Creating…" : "Create today's markets"}
           </Button>
@@ -1027,6 +1084,7 @@ function MarketCreation({
               <Button
                 sm
                 ghost
+                aria-label={`Create today's ${ticker} strike grid`}
                 disabled={!canCreate || busyTicker !== null || close == null}
                 onClick={() => {
                   setBusyTicker(ticker);
@@ -1143,8 +1201,11 @@ function SyntheticStrikeControl({
 
       <div style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label>Ticker</Label>
+          <Label>
+            <label htmlFor="synth-ticker">Ticker</label>
+          </Label>
           <select
+            id="synth-ticker"
             className="field"
             value={ticker}
             onChange={(e) => setTicker(e.target.value as Ticker)}
@@ -1152,16 +1213,19 @@ function SyntheticStrikeControl({
           >
             {MAG7_TICKERS.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {t} — {TICKER_NAME[t]}
               </option>
             ))}
           </select>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <Label>Strike (USD)</Label>
+          <Label>
+            <label htmlFor="synth-strike">Strike (USD)</label>
+          </Label>
           <div style={{ position: "relative" }}>
             <span
+              aria-hidden
               style={{
                 position: "absolute",
                 left: 10,
@@ -1174,6 +1238,7 @@ function SyntheticStrikeControl({
               $
             </span>
             <input
+              id="synth-strike"
               className="field"
               inputMode="decimal"
               placeholder={oraclePrice != null ? (oraclePrice / 100).toFixed(2) : "0.00"}
@@ -1191,7 +1256,7 @@ function SyntheticStrikeControl({
           primary
           disabled={!canCreate || busy}
           onClick={() => void submit()}
-          leftIcon={<IconBolt size={13} />}
+          leftIcon={<IconBolt size={13} aria-hidden />}
         >
           {busy ? "Adding…" : "Add strike"}
         </Button>
@@ -1214,11 +1279,26 @@ function PauseControl({
   onToggle: (next: boolean) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  const [armed, setArmed] = useState(false);
   const paused = config?.paused ?? false;
+
+  // Pausing halts trading for every market — require an explicit confirm click.
+  // Unpausing is restorative, so it runs immediately.
+  const willPause = !paused;
+
+  async function run() {
+    setBusy(true);
+    try {
+      await onToggle(!paused);
+    } finally {
+      setBusy(false);
+      setArmed(false);
+    }
+  }
 
   return (
     <Card>
-      <SectionTitle>Pause / Unpause</SectionTitle>
+      <SectionTitle>Pause / Unpause trading</SectionTitle>
       <div
         style={{
           display: "flex",
@@ -1234,30 +1314,53 @@ function PauseControl({
           <span className="mono">redeem_pair</span> for all markets.{" "}
           Current state:{" "}
           <span style={{ color: paused ? "var(--down)" : "var(--up)", fontWeight: 600 }}>
-            {paused ? "PAUSED" : "ACTIVE"}
+            {paused ? "Paused" : "Active"}
           </span>
           .
         </div>
-        <Button
-          lg
-          primary={!paused}
-          disabled={!canToggle || busy || !config}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await onToggle(!paused);
-            } finally {
-              setBusy(false);
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {armed && willPause && !busy && (
+            <span style={{ fontSize: 12.5, color: "var(--down)" }}>
+              Pause all markets?
+            </span>
+          )}
+          {armed && willPause && !busy && (
+            <Button sm ghost onClick={() => setArmed(false)} aria-label="Cancel pause">
+              Cancel
+            </Button>
+          )}
+          <Button
+            lg
+            // Pause is destructive → down tokens; unpause is restorative → primary accent.
+            primary={!willPause}
+            disabled={!canToggle || busy || !config}
+            onClick={() => {
+              if (willPause && !armed) {
+                setArmed(true);
+                return;
+              }
+              void run();
+            }}
+            style={
+              willPause
+                ? {
+                    background: armed ? "var(--down)" : "transparent",
+                    color: armed ? "var(--down-ink)" : "var(--down)",
+                    borderColor: "var(--down-line)",
+                  }
+                : undefined
             }
-          }}
-          style={
-            paused
-              ? undefined
-              : { background: "var(--down)", borderColor: "var(--down)" }
-          }
-        >
-          {busy ? "Submitting…" : paused ? "Unpause program" : "Pause program"}
-        </Button>
+          >
+            {busy
+              ? "Submitting…"
+              : willPause
+                ? armed
+                  ? "Confirm pause"
+                  : "Pause program"
+                : "Unpause program"}
+          </Button>
+        </div>
       </div>
     </Card>
   );
