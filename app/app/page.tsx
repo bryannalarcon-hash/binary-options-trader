@@ -8,15 +8,8 @@ import {
   Button,
   CaretMark,
   Card,
-  Label,
-  Pill,
-  ProbBar,
-  IconBolt,
   IconCaret,
   IconCheck,
-  IconPyth,
-  IconRight,
-  IconWallet,
   fmt$,
 } from "@/components/caret";
 import { MarketStatusChip } from "@/components/MarketStatusChip";
@@ -36,8 +29,10 @@ function useFeatured(ticker: Ticker): {
   strikeDisplay: string;
   spotDollars: number | null;
   yes: number | null;
+  estimated: boolean;
+  loading: boolean;
 } {
-  const { rows } = useStrikeList(ticker);
+  const { rows, loading } = useStrikeList(ticker);
   const { spotUsd } = useSpotPrice(ticker);
   const spotCents = spotUsd != null ? Math.round(spotUsd * 100) : null;
 
@@ -53,15 +48,18 @@ function useFeatured(ticker: Ticker): {
     strikeDisplay: atm ? `$${(atm.strike / 100).toFixed(0)}` : "—",
     spotDollars: spotUsd,
     yes: atm?.yesCents ?? null,
+    estimated: atm?.estimated ?? false,
+    loading: loading && rows.length === 0,
   };
 }
 
 /**
- * Landing — REAL on-chain data only.
+ * Landing — approachable-retail redesign, REAL on-chain data only.
  *
- *   - Headline + featured cards read the live ATM strike / yes price from
+ *   - Hero + featured card read the live ATM strike / yes price from
  *     `useStrikeList` and the oracle spot from `useSpotPrice`.
- *   - Ticker tape reads real oracle spot per ticker (no synthesized change).
+ *   - The markets list reads one real ATM row per MAG7 ticker; honest
+ *     "—" / estimate marking is preserved.
  */
 export default function LandingPage() {
   const mounted = useMounted();
@@ -70,439 +68,288 @@ export default function LandingPage() {
   const connected = mounted && wallet.connected;
 
   const featured = useFeatured("AAPL");
-  const sideCard = useFeatured("MSFT");
 
-  function connectOrGo() {
+  function connectWallet() {
     if (!connected) walletModal.setVisible(true);
   }
 
   return (
     <div>
-      {/* HERO */}
-      <section className="accent-glow" style={{ padding: "80px 0 60px" }}>
-        <div className="page" style={{ paddingBottom: 0 }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1.4fr 1fr",
-              gap: 80,
-              alignItems: "center",
-            }}
-          >
-            <div>
-              <Pill tone="accent" style={{ marginBottom: 28 }}>
-                <span
-                  className="dot"
-                  style={{
-                    background: "var(--accent)",
-                    boxShadow: "0 0 8px var(--accent)",
-                  }}
-                />
-                MAG7 · 0DTE · Pyth-settled · Solana
-              </Pill>
-
-              <h1 style={{ marginBottom: 22, color: "var(--text)" }}>
-                Will{" "}
-                <span style={{ color: "var(--accent)" }}>{featured.ticker}</span>{" "}
-                close above{" "}
-                <span
-                  className="num"
-                  style={{ color: "var(--text-2)", fontFeatureSettings: '"ss01"' }}
-                >
-                  {featured.strikeDisplay}
-                </span>{" "}
-                today?
-              </h1>
-
-              <p
-                style={{
-                  fontSize: 19,
-                  lineHeight: 1.5,
-                  color: "var(--text-2)",
-                  maxWidth: 560,
-                  marginBottom: 14,
-                }}
-              >
-                Trade Yes/No tokens on whether MAG7 stocks close above today&apos;s
-                strike. One question, one day, one outcome. Settled at the bell by
-                Pyth.
-              </p>
-              <p
-                style={{
-                  fontSize: 14,
-                  color: "var(--text-3)",
-                  maxWidth: 560,
-                  marginBottom: 32,
-                }}
-              >
-                Yes + No = $1.00 USDC. Always. Non-custodial. No margin. No Greeks.
-              </p>
-
-              <div style={{ display: "flex", gap: 10 }}>
-                {connected ? (
-                  <Link
-                    href="/markets"
-                    className="btn primary lg"
-                    style={{ textDecoration: "none" }}
-                  >
-                    Go to Markets
-                    <IconCaret size={12} />
-                  </Link>
-                ) : (
-                  <Button primary lg onClick={connectOrGo}>
-                    Connect wallet
-                    <IconCaret size={12} />
-                  </Button>
-                )}
-                <Link
-                  href="/markets"
-                  className="btn lg"
-                  style={{ textDecoration: "none" }}
-                >
-                  Browse markets
-                </Link>
-              </div>
-
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 24,
-                  marginTop: 36,
-                  fontSize: 12,
-                  color: "var(--text-3)",
-                  fontFamily: "var(--mono)",
-                  flexWrap: "wrap",
-                }}
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <IconBolt size={12} style={{ color: "var(--accent)" }} /> 400ms
-                  blocks
-                </span>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <IconCheck size={12} style={{ color: "var(--up)" }} /> On-chain CLOB
-                </span>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <IconPyth size={12} style={{ color: "var(--accent)" }} /> Pyth-settled
-                </span>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <IconWallet size={12} /> Self-custody
-                </span>
-              </div>
-            </div>
-
-            <FeaturedContract
-              ticker={sideCard.ticker}
-              strikeCents={sideCard.strikeCents}
-              strikeDisplay={sideCard.strikeDisplay}
-              yes={sideCard.yes}
-              spotDollars={sideCard.spotDollars}
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* TICKER */}
-      <TickerTape />
-
-      {/* HOW IT WORKS */}
-      <section className="page">
-        <div style={{ marginBottom: 32 }}>
-          <Label>How it works</Label>
-          <h2 style={{ marginTop: 8 }}>One question. One day. One outcome.</h2>
-        </div>
-
+      {/* ───────────────────────── HERO ─────────────────────────
+          Plain-language value prop a non-expert grasps in 5 seconds,
+          paired with one live featured market. Calm, centered, generous
+          whitespace — matching the redesigned trade screen. */}
+      <section style={{ padding: "72px 0 8px" }}>
         <div
+          className="page"
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gap: 1,
-            background: "var(--line-soft)",
-            borderRadius: 12,
-            overflow: "hidden",
-            border: "1px solid var(--line-soft)",
+            paddingBottom: 0,
+            maxWidth: 920,
+            textAlign: "center",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
           }}
         >
-          {[
-            {
-              n: "01",
-              t: "Pick a strike",
-              d: "Each MAG7 ticker has up to 7 strikes daily (±3/6/9% around yesterday's close). Pick the one that matches your view.",
-              k: ["8:00 AM ET", "strike chain auto-built"],
-            },
-            {
-              n: "02",
-              t: "Trade Yes / No",
-              d: "Yes pays $1 if the stock closes at-or-above. No pays $1 if it doesn't. One book, two perspectives.",
-              k: ["Market or limit", "On-chain CLOB"],
-            },
-            {
-              n: "03",
-              t: "Settle at 4 PM ET",
-              d: "Pyth publishes the close. Smart contract settles. Winners redeem $1.00 per token, on-chain.",
-              k: ["~4:05 PM ET", "Atomic redeem"],
-            },
-          ].map((c) => (
-            <div key={c.n} style={{ background: "var(--bg-elev)", padding: 28 }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                  marginBottom: 32,
-                }}
-              >
-                <span
-                  style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: 11,
-                    color: "var(--accent)",
-                    letterSpacing: "0.08em",
-                  }}
-                >
-                  {c.n}
-                </span>
-                <IconRight size={14} style={{ color: "var(--text-3)" }} />
-              </div>
-              <h3 style={{ marginBottom: 10 }}>{c.t}</h3>
-              <p
-                style={{
-                  fontSize: 13.5,
-                  color: "var(--text-2)",
-                  lineHeight: 1.6,
-                  marginBottom: 18,
-                }}
-              >
-                {c.d}
-              </p>
-              <div
-                style={{
-                  display: "flex",
-                  gap: 12,
-                  fontFamily: "var(--mono)",
-                  fontSize: 11,
-                  color: "var(--text-3)",
-                }}
-              >
-                {c.k.map((kk, i) => (
-                  <span key={i}>
-                    {i > 0 && (
-                      <span style={{ marginRight: 12, color: "var(--text-4)" }}>
-                        ·
-                      </span>
-                    )}
-                    {kk}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+          <h1
+            style={{
+              fontSize: "clamp(30px, 5vw, 46px)",
+              lineHeight: 1.12,
+              letterSpacing: "-0.02em",
+              color: "var(--text)",
+              margin: 0,
+              maxWidth: 720,
+            }}
+          >
+            Bet yes or no on where a big stock closes today.
+          </h1>
 
-      {/* PRICING RELATIONSHIP */}
-      <section className="page" style={{ paddingTop: 0 }}>
-        <Card
-          padding={36}
-          style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 56 }}
-        >
-          <div>
-            <Label>The math</Label>
-            <h2 style={{ marginTop: 8, marginBottom: 18 }}>
-              Yes + No = $1.00.
-              <br />
-              Always.
-            </h2>
-            <p
-              style={{
-                fontSize: 14,
-                color: "var(--text-2)",
-                lineHeight: 1.6,
-                marginBottom: 16,
-              }}
+          <p
+            style={{
+              fontSize: 18,
+              lineHeight: 1.55,
+              color: "var(--text-2)",
+              maxWidth: 580,
+              margin: "20px 0 0",
+            }}
+          >
+            Pick a stock and a price. Say whether it closes at or above that
+            price by the end of the day. The winning side pays $1 per share.
+          </p>
+
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              flexWrap: "wrap",
+              justifyContent: "center",
+              marginTop: 30,
+            }}
+          >
+            <Link
+              href="/markets"
+              className="btn primary lg"
+              style={{ textDecoration: "none" }}
             >
-              Each Yes token is a digital cash-or-nothing call on AAPL, MSFT,
-              GOOGL, AMZN, NVDA, META, TSLA — strike K, expiry today&apos;s close.
-            </p>
-            <p style={{ fontSize: 14, color: "var(--text-2)", lineHeight: 1.6 }}>
-              The Yes price approximates the market-implied probability that
-              S<sub>T</sub> ≥ K.
-            </p>
+              Browse markets
+              <IconCaret size={12} />
+            </Link>
+            {!connected && (
+              <Button lg onClick={connectWallet}>
+                Connect wallet
+              </Button>
+            )}
           </div>
 
           <div
             style={{
               display: "flex",
-              flexDirection: "column",
+              alignItems: "center",
+              gap: 18,
+              marginTop: 26,
+              fontSize: 13,
+              color: "var(--text-3)",
+              flexWrap: "wrap",
               justifyContent: "center",
-              gap: 16,
             }}
           >
-            <PayoffMini strikeDisplay={featured.strikeDisplay} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div
+            <Trust>Your wallet, your funds</Trust>
+            <Dot />
+            <Trust>Settled by Pyth at the close</Trust>
+            <Dot />
+            <Trust>Most you can lose is what you pay</Trust>
+          </div>
+
+          <FeaturedMarket
+            ticker={featured.ticker}
+            strikeCents={featured.strikeCents}
+            strikeDisplay={featured.strikeDisplay}
+            yes={featured.yes}
+            spotDollars={featured.spotDollars}
+            estimated={featured.estimated}
+            loading={featured.loading}
+          />
+        </div>
+      </section>
+
+      {/* ───────────────────────── MARKETS ─────────────────────────
+          One scannable row per MAG7 ticker — spot, the at-the-money
+          price, and a clear Yes/No, each an obvious click into the market. */}
+      <section className="page" style={{ paddingTop: 56, maxWidth: 760 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            marginBottom: 16,
+            flexWrap: "wrap",
+            gap: 8,
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: 22, letterSpacing: "-0.01em" }}>
+            Today&apos;s markets
+          </h2>
+          <Link
+            href="/markets"
+            style={{
+              fontSize: 14,
+              color: "var(--text-2)",
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            See all <IconCaret size={11} />
+          </Link>
+        </div>
+
+        <Card padding={0} style={{ overflow: "hidden" }}>
+          {MAG7_TICKERS.map((t, i) => (
+            <MarketRow key={t} ticker={t} first={i === 0} />
+          ))}
+        </Card>
+
+        <p
+          style={{
+            fontSize: 12.5,
+            color: "var(--text-3)",
+            marginTop: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          Prices are cents on the dollar and read as a chance. A Yes at 60¢
+          means the market puts the odds near 60%. Prices marked{" "}
+          <span className="num">~</span> are estimates until trading opens a
+          two-sided book.
+        </p>
+      </section>
+
+      {/* ───────────────────────── HOW IT WORKS ─────────────────────────
+          Three calm, plain-language steps. No eyebrow, no 01/02/03 markers. */}
+      <section className="page" style={{ paddingTop: 56, maxWidth: 920 }}>
+        <h2
+          style={{
+            margin: "0 0 24px",
+            fontSize: 22,
+            letterSpacing: "-0.01em",
+          }}
+        >
+          How it works
+        </h2>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 16,
+          }}
+        >
+          <Step
+            title="Pick a market"
+            body="Choose one of seven big stocks and a closing price you have a view on."
+          />
+          <Step
+            title="Buy Yes or No"
+            body="Yes wins if it closes at or above that price. No wins if it closes below. You pay the price up front."
+          />
+          <Step
+            title="Get paid at the close"
+            body="At 4:00 PM ET the closing price decides it. Every winning share pays out exactly $1."
+          />
+        </div>
+      </section>
+
+      {/* ───────────────────────── REASSURANCE ─────────────────────────
+          A short, calm "why trust this" block — plain language, no jargon. */}
+      <section className="page" style={{ paddingTop: 48, maxWidth: 760 }}>
+        <Card padding={28}>
+          <h3 style={{ margin: "0 0 16px", fontSize: 17 }}>
+            Simple by design
+          </h3>
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "grid",
+              gap: 14,
+            }}
+          >
+            {(
+              [
+                [
+                  "You hold your own funds",
+                  "Trades run from your Solana wallet. Meridian never takes custody of your money.",
+                ],
+                [
+                  "No margin, no surprises",
+                  "You pay a price between $0 and $1. That price is the most you can lose.",
+                ],
+                [
+                  "Settled by a trusted price",
+                  "Pyth publishes the official close on-chain. Winners redeem $1 a share, automatically.",
+                ],
+              ] as [string, string][]
+            ).map(([t, d]) => (
+              <li
+                key={t}
                 style={{
-                  padding: 14,
-                  background: "var(--up-soft)",
-                  borderRadius: 8,
-                  border: "1px solid var(--up-line)",
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr",
+                  gap: 12,
+                  alignItems: "start",
                 }}
               >
-                <div
-                  style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: 10.5,
-                    letterSpacing: "0.08em",
-                    color: "var(--up)",
-                    textTransform: "uppercase",
-                    marginBottom: 4,
-                  }}
-                >
-                  YES @ {featured.yes != null ? `${featured.yes}¢` : "—"}
+                <IconCheck
+                  size={15}
+                  style={{ color: "var(--up)", marginTop: 3 }}
+                />
+                <div>
+                  <div
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 500,
+                      color: "var(--text)",
+                    }}
+                  >
+                    {t}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 13.5,
+                      color: "var(--text-3)",
+                      lineHeight: 1.5,
+                      marginTop: 2,
+                    }}
+                  >
+                    {d}
+                  </div>
                 </div>
-                <div style={{ fontSize: 13, color: "var(--text-2)" }}>
-                  You pay{" "}
-                  {featured.yes != null ? `$${(featured.yes / 100).toFixed(2)}` : "—"} → wins
-                  $1.00 if {featured.ticker} closes ≥ {featured.strikeDisplay}
-                </div>
-              </div>
-              <div
-                style={{
-                  padding: 14,
-                  background: "var(--down-soft)",
-                  borderRadius: 8,
-                  border: "1px solid var(--down-line)",
-                }}
-              >
-                <div
-                  style={{
-                    fontFamily: "var(--mono)",
-                    fontSize: 10.5,
-                    letterSpacing: "0.08em",
-                    color: "var(--down)",
-                    textTransform: "uppercase",
-                    marginBottom: 4,
-                  }}
-                >
-                  NO @ {featured.yes != null ? `${100 - featured.yes}¢` : "—"}
-                </div>
-                <div style={{ fontSize: 13, color: "var(--text-2)" }}>
-                  You pay{" "}
-                  {featured.yes != null
-                    ? `$${((100 - featured.yes) / 100).toFixed(2)}`
-                    : "—"}{" "}
-                  → wins $1.00 if {featured.ticker} closes &lt; {featured.strikeDisplay}
-                </div>
-              </div>
-            </div>
+              </li>
+            ))}
+          </ul>
+
+          <div style={{ marginTop: 24 }}>
+            <Link
+              href="/markets"
+              className="btn primary"
+              style={{ textDecoration: "none" }}
+            >
+              Browse markets <IconCaret size={11} />
+            </Link>
           </div>
         </Card>
       </section>
 
-      {/* WHAT YOU GET */}
-      <section className="page" style={{ paddingTop: 0 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr", gap: 24 }}>
-          <Card padding={28}>
-            <Label>What you get</Label>
-            <ul
-              style={{
-                listStyle: "none",
-                padding: 0,
-                margin: "18px 0 0",
-                display: "grid",
-                gap: 14,
-              }}
-            >
-              {([
-                ["Non-custodial", "Your keys, your tokens. Meridian never holds your USDC."],
-                ["Sub-second CLOB", "In-program order book on Solana — limit/market orders match in the same transaction, ~400ms block time."],
-                ["Pyth-settled", "Same publisher set as Jane Street + Jump. Confidence-checked."],
-                ["Atomic Buy-No", "Mint pair + sell Yes in one wallet click. No two-step UX."],
-                ["Same-day expiry", "Maximum loss is your entry price. No Greeks, no margin calls."],
-              ] as [string, string][]).map(([t, d]) => (
-                <li
-                  key={t}
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "auto 1fr",
-                    gap: 12,
-                    alignItems: "baseline",
-                  }}
-                >
-                  <IconCheck size={13} style={{ color: "var(--up)" }} />
-                  <div>
-                    <span
-                      style={{
-                        fontSize: 14,
-                        fontWeight: 500,
-                        color: "var(--text)",
-                      }}
-                    >
-                      {t}
-                    </span>
-                    <span style={{ fontSize: 13, color: "var(--text-3)" }}>
-                      {" "}
-                      — {d}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </Card>
-
-          <Card
-            padding={28}
-            style={{
-              background:
-                "linear-gradient(135deg, var(--accent-soft) 0%, transparent 70%)",
-            }}
-          >
-            <Label>Live demo · Devnet</Label>
-            <h3 style={{ margin: "12px 0 12px" }}>
-              Try it without putting anything at risk.
-            </h3>
-            <p
-              style={{
-                fontSize: 13.5,
-                color: "var(--text-2)",
-                lineHeight: 1.6,
-                marginBottom: 18,
-              }}
-            >
-              Connect a Solana wallet on devnet. Use the in-app USDC faucet, or
-              hit the local validator with{" "}
-              <code
-                style={{
-                  fontFamily: "var(--mono)",
-                  padding: "1px 5px",
-                  background: "var(--bg-elev-2)",
-                  borderRadius: 4,
-                }}
-              >
-                make airdrop
-              </code>
-              .
-            </p>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Link href="/markets" className="btn primary" style={{ textDecoration: "none" }}>
-                Browse live markets <IconCaret size={11} />
-              </Link>
-              {!connected && (
-                <Button onClick={connectOrGo}>Get devnet USDC</Button>
-              )}
-            </div>
-          </Card>
-        </div>
-      </section>
-
-      {/* FOOTER */}
+      {/* ───────────────────────── FOOTER ───────────────────────── */}
       <footer
         className="page"
         style={{
           paddingTop: 24,
           paddingBottom: 32,
           borderTop: "1px solid var(--line-soft)",
-          marginTop: 24,
+          marginTop: 48,
         }}
       >
         <div
@@ -544,243 +391,359 @@ export default function LandingPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Featured contract side-card
+// Small hero trust chips + separator dot
 // ---------------------------------------------------------------------------
-function FeaturedContract({
+function Trust({ children }: { children: React.ReactNode }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <IconCheck size={12} style={{ color: "var(--up)" }} />
+      {children}
+    </span>
+  );
+}
+
+function Dot() {
+  return (
+    <span aria-hidden style={{ color: "var(--text-4)" }}>
+      ·
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Featured market — one live market presented calmly, big Yes/No, the payoff
+// stated in a plain sentence. Mirrors the trade-screen language.
+// ---------------------------------------------------------------------------
+function FeaturedMarket({
   ticker,
   strikeCents,
   strikeDisplay,
   yes,
   spotDollars,
+  estimated,
+  loading,
 }: {
   ticker: Ticker;
   strikeCents: number | null;
   strikeDisplay: string;
   yes: number | null;
   spotDollars: number | null;
+  estimated: boolean;
+  loading: boolean;
 }) {
   const no = yes != null ? 100 - yes : null;
-  const href = strikeCents != null ? `/trade/${ticker}/${strikeCents}` : `/trade/${ticker}`;
+  const href =
+    strikeCents != null ? `/trade/${ticker}/${strikeCents}` : `/trade/${ticker}`;
+  const mark = estimated ? "~" : "";
+
   return (
-    <div style={{ position: "relative" }}>
+    <Card
+      padding={24}
+      style={{
+        width: "100%",
+        maxWidth: 460,
+        marginTop: 44,
+        textAlign: "left",
+      }}
+    >
       <div
         style={{
-          position: "absolute",
-          inset: -12,
-          background:
-            "radial-gradient(60% 50% at 50% 50%, var(--accent-soft), transparent 70%)",
-          filter: "blur(40px)",
-          zIndex: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 14,
         }}
-      />
-      <Card padding={24} style={{ position: "relative", background: "var(--bg-elev)" }}>
+      >
+        <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>
+          A market open now
+        </span>
+        <MarketStatusChip />
+      </div>
+
+      <div
+        style={{
+          fontSize: 20,
+          fontWeight: 600,
+          letterSpacing: "-0.01em",
+          color: "var(--text)",
+          lineHeight: 1.3,
+        }}
+      >
+        Will {ticker} close at or above{" "}
+        <span className="num">{strikeDisplay}</span> today?
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 6 }}>
+        {TICKER_NAME[ticker]} · now at{" "}
+        <span className="num" style={{ color: "var(--text-2)" }}>
+          {spotDollars != null ? fmt$(spotDollars) : loading ? "…" : "—"}
+        </span>{" "}
+        · settles 4:00 PM ET
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 12,
+          marginTop: 18,
+        }}
+      >
+        <OutcomeButton
+          href={href}
+          label="Yes"
+          sub="closes at or above"
+          cents={yes}
+          mark={mark}
+          tone="up"
+        />
+        <OutcomeButton
+          href={href}
+          label="No"
+          sub="closes below"
+          cents={no}
+          mark={mark}
+          tone="dn"
+        />
+      </div>
+
+      <div
+        style={{
+          fontSize: 12.5,
+          color: "var(--text-3)",
+          marginTop: 14,
+          lineHeight: 1.5,
+        }}
+      >
+        {yes != null ? (
+          <>
+            Buy Yes for {mark}
+            {fmtPrice(yes)} to win $1.00 if {ticker} closes at or above{" "}
+            {strikeDisplay}.
+            {estimated && " Price is an estimate until the book opens."}
+          </>
+        ) : loading ? (
+          "Loading the live price…"
+        ) : (
+          "No market is open for this stock right now."
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/** Big tappable Yes/No tile that links into the market. */
+function OutcomeButton({
+  href,
+  label,
+  sub,
+  cents,
+  mark,
+  tone,
+}: {
+  href: string;
+  label: string;
+  sub: string;
+  cents: number | null;
+  mark: string;
+  tone: "up" | "dn";
+}) {
+  const color = tone === "up" ? "var(--up)" : "var(--down)";
+  const bg = tone === "up" ? "var(--up-soft)" : "var(--down-soft)";
+  const line = tone === "up" ? "var(--up-line)" : "var(--down-line)";
+  return (
+    <Link
+      href={href}
+      className="row-hover"
+      style={{
+        display: "block",
+        padding: "14px 16px",
+        borderRadius: 10,
+        background: bg,
+        border: `1px solid ${line}`,
+        textDecoration: "none",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+        }}
+      >
+        <span style={{ fontSize: 15, fontWeight: 600, color }}>{label}</span>
+        <span
+          className="num"
+          style={{ fontSize: 22, fontWeight: 600, color }}
+        >
+          {cents != null ? `${mark}${cents}¢` : "—"}
+        </span>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 2 }}>
+        {sub}
+      </div>
+    </Link>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Markets list row — one ATM market per ticker, scannable and clickable.
+// Reads REAL data per ticker; renders "—" while null, marks estimates.
+// ---------------------------------------------------------------------------
+function MarketRow({ ticker, first }: { ticker: Ticker; first: boolean }) {
+  const { strikeCents, strikeDisplay, spotDollars, yes, estimated, loading } =
+    useFeatured(ticker);
+  const no = yes != null ? 100 - yes : null;
+  const mark = estimated ? "~" : "";
+  const href =
+    strikeCents != null ? `/trade/${ticker}/${strikeCents}` : `/trade/${ticker}`;
+
+  return (
+    <Link
+      href={href}
+      className="row-hover"
+      aria-label={`Trade ${ticker} ${strikeDisplay} market`}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(120px, 1.4fr) minmax(90px, 1fr) auto",
+        alignItems: "center",
+        gap: 12,
+        padding: "14px 18px",
+        borderTop: first ? "none" : "1px solid var(--line-soft)",
+        textDecoration: "none",
+        color: "var(--text)",
+      }}
+    >
+      {/* Stock + question */}
+      <div style={{ minWidth: 0 }}>
         <div
           style={{
             display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            marginBottom: 14,
+            alignItems: "baseline",
+            gap: 8,
+            flexWrap: "wrap",
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span className="label">Featured</span>
-            <MarketStatusChip />
-          </div>
+          <span style={{ fontSize: 15, fontWeight: 600 }}>{ticker}</span>
           <span
             style={{
-              fontSize: 11,
-              fontFamily: "var(--mono)",
+              fontSize: 12.5,
               color: "var(--text-3)",
+              whiteSpace: "nowrap",
             }}
           >
-            settles 4:00 PM ET
+            close ≥ <span className="num">{strikeDisplay}</span>
           </span>
         </div>
-
-        <Link
-          href={href}
-          style={{ display: "block", marginBottom: 18, textDecoration: "none" }}
-        >
-          <h3 style={{ fontSize: 28, letterSpacing: "-0.02em", marginBottom: 4 }}>
-            {ticker}{" "}
-            <IconCaret
-              size={15}
-              style={{
-                verticalAlign: "middle",
-                color: "var(--accent)",
-                margin: "0 2px",
-              }}
-            />{" "}
-            <span className="num">{strikeDisplay}</span>
-          </h3>
-          <span style={{ fontSize: 13, color: "var(--text-3)" }}>
-            {TICKER_NAME[ticker]} · spot {spotDollars != null ? fmt$(spotDollars) : "—"} ·
-            settles 4:00 PM ET
-          </span>
-        </Link>
-
-        <ProbBar yes={yes ?? 50} h={8} />
-
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 12,
-            marginTop: 18,
+            fontSize: 12,
+            color: "var(--text-4)",
+            marginTop: 2,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
           }}
         >
-          <div
-            style={{
-              padding: "12px 14px",
-              borderRadius: 8,
-              background: "var(--up-soft)",
-              border: "1px solid var(--up-line)",
-            }}
-          >
-            <div className="label" style={{ color: "var(--up)" }}>
-              YES
-            </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                marginTop: 4,
-              }}
-            >
-              <span
-                className="num"
-                style={{ fontSize: 22, fontWeight: 600, color: "var(--up)" }}
-              >
-                {yes != null ? `${yes}¢` : "—"}
-              </span>
-              <span
-                className="mono"
-                style={{ fontSize: 11, color: "var(--text-3)" }}
-              >
-                {yes != null ? `= ${yes}%` : ""}
-              </span>
-            </div>
-          </div>
-          <div
-            style={{
-              padding: "12px 14px",
-              borderRadius: 8,
-              background: "var(--down-soft)",
-              border: "1px solid var(--down-line)",
-            }}
-          >
-            <div className="label" style={{ color: "var(--down)" }}>
-              NO
-            </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                marginTop: 4,
-              }}
-            >
-              <span
-                className="num"
-                style={{ fontSize: 22, fontWeight: 600, color: "var(--down)" }}
-              >
-                {no != null ? `${no}¢` : "—"}
-              </span>
-              <span
-                className="mono"
-                style={{ fontSize: 11, color: "var(--text-3)" }}
-              >
-                {no != null ? `= ${no}%` : ""}
-              </span>
-            </div>
-          </div>
+          {TICKER_NAME[ticker]}
         </div>
-      </Card>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Ticker tape — REAL oracle spot per MAG7 ticker (no synthesized change).
-// ---------------------------------------------------------------------------
-function TickerTape() {
-  // Two passes for the seamless marquee. Spot read live inside each item.
-  return (
-    <div className="ticker-wrap" style={{ background: "var(--bg-elev)" }}>
-      <div className="ticker">
-        {[0, 1].map((pass) =>
-          MAG7_TICKERS.map((t) => (
-            <TickerTapeItem key={`${pass}-${t}`} ticker={t} />
-          )),
-        )}
       </div>
-    </div>
+
+      {/* Spot */}
+      <div style={{ textAlign: "right" }}>
+        <div className="num" style={{ fontSize: 14, color: "var(--text-2)" }}>
+          {spotDollars != null ? fmt$(spotDollars) : loading ? "…" : "—"}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-4)" }}>now</div>
+      </div>
+
+      {/* Yes / No pills */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <PricePill label="Yes" cents={yes} mark={mark} tone="up" />
+        <PricePill label="No" cents={no} mark={mark} tone="dn" />
+        <IconCaret
+          size={12}
+          aria-hidden
+          style={{ color: "var(--text-4)", flexShrink: 0 }}
+        />
+      </div>
+    </Link>
   );
 }
 
-function TickerTapeItem({ ticker }: { ticker: Ticker }) {
-  const { spotUsd } = useSpotPrice(ticker);
+function PricePill({
+  label,
+  cents,
+  mark,
+  tone,
+}: {
+  label: string;
+  cents: number | null;
+  mark: string;
+  tone: "up" | "dn";
+}) {
+  const color = tone === "up" ? "var(--up)" : "var(--down)";
+  const bg = tone === "up" ? "var(--up-soft)" : "var(--down-soft)";
   return (
-    <span className="t">
-      <span className="sym">{ticker}</span>
-      <span className="muted">{TICKER_NAME[ticker]}</span>
-      <span>{spotUsd != null ? fmt$(spotUsd) : "—"}</span>
+    <span
+      style={{
+        display: "inline-flex",
+        flexDirection: "column",
+        alignItems: "center",
+        minWidth: 52,
+        padding: "6px 10px",
+        borderRadius: 8,
+        background: bg,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 10,
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
+          color,
+        }}
+      >
+        {label}
+      </span>
+      <span
+        className="num"
+        style={{ fontSize: 14, fontWeight: 600, color, lineHeight: 1.2 }}
+      >
+        {cents != null ? `${mark}${cents}¢` : "—"}
+      </span>
     </span>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Payoff mini SVG
+// How-it-works step card
 // ---------------------------------------------------------------------------
-function PayoffMini({ strikeDisplay }: { strikeDisplay: string }) {
+function Step({ title, body }: { title: string; body: string }) {
   return (
-    <svg viewBox="0 0 400 180" style={{ width: "100%", height: 180 }}>
-      <line x1="40" y1="20" x2="40" y2="155" stroke="var(--line)" />
-      <line x1="40" y1="155" x2="385" y2="155" stroke="var(--line)" />
-      <line
-        x1="210"
-        y1="20"
-        x2="210"
-        y2="158"
-        stroke="var(--accent)"
-        strokeDasharray="3 3"
-        strokeWidth="1"
-        opacity="0.7"
-      />
-      <text x="210" y="14" textAnchor="middle" fill="var(--accent)" fontSize="10" fontFamily="var(--mono)">
-        K = {strikeDisplay}
-      </text>
-      <path d="M40,130 L210,130 L210,40 L385,40" fill="none" stroke="var(--up)" strokeWidth="2" />
-      <text x="380" y="34" textAnchor="end" fill="var(--up)" fontSize="10" fontFamily="var(--mono)">
-        YES pays $1
-      </text>
-      <path
-        d="M40,40 L210,40 L210,130 L385,130"
-        fill="none"
-        stroke="var(--down)"
-        strokeWidth="2"
-        strokeDasharray="4 3"
-        opacity="0.7"
-      />
-      <text x="50" y="34" fill="var(--down)" fontSize="10" fontFamily="var(--mono)">
-        NO pays $1
-      </text>
-      <text x="40" y="170" fill="var(--text-3)" fontSize="10" fontFamily="var(--mono)">
-        −9%
-      </text>
-      <text x="210" y="170" textAnchor="middle" fill="var(--text-3)" fontSize="10" fontFamily="var(--mono)">
-        close
-      </text>
-      <text x="380" y="170" textAnchor="end" fill="var(--text-3)" fontSize="10" fontFamily="var(--mono)">
-        +9%
-      </text>
-      <text x="32" y="42" textAnchor="end" fill="var(--text-3)" fontSize="10" fontFamily="var(--mono)">
-        $1
-      </text>
-      <text x="32" y="135" textAnchor="end" fill="var(--text-3)" fontSize="10" fontFamily="var(--mono)">
-        $0
-      </text>
-    </svg>
+    <div
+      style={{
+        padding: 22,
+        borderRadius: "var(--r)",
+        background: "var(--bg-elev)",
+        border: "1px solid var(--line-soft)",
+      }}
+    >
+      <h3 style={{ margin: "0 0 8px", fontSize: 16 }}>{title}</h3>
+      <p
+        style={{
+          margin: 0,
+          fontSize: 13.5,
+          color: "var(--text-3)",
+          lineHeight: 1.55,
+        }}
+      >
+        {body}
+      </p>
+    </div>
   );
+}
+
+/** Format a cents price (1..99) as a dollar string, e.g. 60 → "$0.60". */
+function fmtPrice(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }
