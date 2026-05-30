@@ -39,6 +39,7 @@ import { env } from "./env";
 import { withTimeout } from "./loading-state";
 import idl from "./meridian-idl.json";
 import { pickLatestSettledMarkets } from "./resolved-strikes";
+import { canonicalStrikeSet } from "./strike-grid";
 import { MAG7_TICKERS, type Ticker } from "./tickers";
 
 /**
@@ -846,7 +847,15 @@ export function useStrikeList(ticker: Ticker): {
       const prev = byStrike.get(m.strike);
       if (!prev || m.expiryTs > prev.expiryTs) byStrike.set(m.strike, m);
     }
-    const active = [...byStrike.values()];
+    let active = [...byStrike.values()];
+    // Collapse off-grid duplicate strikes (e.g. devnet markets re-created at a
+    // drifted reference, which left MSFT with 9 strikes instead of 6) back to
+    // the canonical ±3/6/9% ladder. No-op unless an over-full set is present.
+    const keep = canonicalStrikeSet(
+      active.map((m) => m.strike),
+      spotUsd != null ? Math.round(spotUsd * 100) : null,
+    );
+    if (keep) active = active.filter((m) => keep.has(m.strike));
     if (active.length === 0) {
       setRows(EMPTY_STRIKE_ROWS);
       setError(false);

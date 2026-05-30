@@ -107,8 +107,8 @@ MERIDIAN_RUN_HARNESS_SUITES=1 ./scripts/run-anchor-tests.sh edge
 | Integration (math-only + T-IT-06) | `tests/anchor/integration.test.ts` | **2** | 7 | 0 |
 | Automation regression (`node:test`) | `automation/src/lib/anchor.test.ts` | **2** | 0 | 0 |
 | Morning price/seed regression (`node:test`) | `automation/src/lib/morning-price.test.ts` | **4** | 0 | 0 |
-| Frontend logic regression (`mocha`) | `tests/unit/*.test.ts` | **21** | 0 | 0 |
-| **Total (green run)**      | — | **71** | 23 | **0** |
+| Frontend logic regression (`mocha`) | `tests/unit/*.test.ts` | **25** | 0 | 0 |
+| **Total (green run)**      | — | **75** | 23 | **0** |
 
 - The 39 core tests cover every one of the 16 program instructions, plus all
   PRD-listed edge/error paths (zero amount, out-of-range price, paused, stale
