@@ -10,6 +10,9 @@ keys/
 .test-validator.pid
 test-ledger/
 
+# All log files — never commit; some captured RPC URLs with a live API key.
+*.log
+
 # Build outputs (added pre-emptively for when Anchor / Next.js show up)
 node_modules/
 target/
