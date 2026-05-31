@@ -355,6 +355,57 @@ textarea { height: auto; padding: 10px 12px; }
 }
 [data-density="compact"] .page { padding: 22px 28px 60px; }
 
+/* ===== Mobile (phones / small tablets) ===== */
+/* Tighter page gutters so content isn't squeezed by 40px of side padding. */
+@media (max-width: 720px) {
+  .page,
+  [data-density="compact"] .page { padding-left: 16px; padding-right: 16px; }
+}
+
+/* Reusable horizontal-scroll wrapper for wide tables on small screens. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* ===== Responsive header ===== */
+/* Hamburger is desktop-hidden; the desktop nav + secondary controls hide on
+   phones and move into the slide-down menu. */
+.hdr-burger { display: none; }
+.hdr-menu {
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--line-soft);
+  padding: 6px 16px 12px;
+  display: flex;
+  flex-direction: column;
+}
+.hdr-menu a,
+.hdr-menu .hdr-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 13px 6px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-2);
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+.hdr-menu a.on { color: var(--text); }
+.hdr-menu-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 12px;
+}
+@media (max-width: 720px) {
+  .hdr-inner { padding-left: 16px !important; padding-right: 16px !important; gap: 10px !important; }
+  .hdr-burger { display: inline-flex !important; }
+}
+
 .stack { display: flex; flex-direction: column; gap: var(--density-gap); }
 .hstack { display: flex; align-items: center; gap: var(--density-gap); }
 .grid { display: grid; gap: var(--density-gap); }
