@@ -1,7 +1,9 @@
 # Secrets and keypairs
 keys/
-.env
-.env.local
+# Ignore ALL env files (at any depth) except the committed template. This
+# covers .env, .env.local, .env.production, .env.*.backup, app/.env.*, etc.
+.env*
+!.env.example
 
 # Local validator runtime artifacts
 .test-validator.log
@@ -44,6 +46,7 @@ project_1771969779565.pdf
 
 # Internal working docs — not part of the submission (session handoffs,
 # AI task breakdowns, internal research)
+handoff/
 docs/HANDOFF.md
 docs/CODING_PRD.md
 docs/PEAK6_RESEARCH.md
