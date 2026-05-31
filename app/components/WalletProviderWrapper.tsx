@@ -9,6 +9,7 @@ import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import type { WalletError } from "@solana/wallet-adapter-base";
 
 import { env } from "@/lib/env";
+import { failoverFetch } from "@/lib/rpc-failover";
 import { notify } from "@/lib/notify";
 import { BurnerWalletAdapter } from "@/lib/burner-wallet";
 import { AdminWalletAdapter } from "@/lib/admin-wallet";
@@ -90,8 +91,20 @@ export function WalletProviderWrapper({ children }: { children: ReactNode }) {
     notify.error(`Wallet: ${error?.message || error?.name || "connection failed"}`);
   }, []);
 
+  // Route all HTTP RPC through the failover chain (primary → fallback key →
+  // public RPC) with a circuit-breaker, and disable web3.js's own 429 retry so
+  // it doesn't hammer a capped endpoint — the failover handles routing instead.
+  const connectionConfig = useMemo(
+    () => ({
+      commitment: "confirmed" as const,
+      disableRetryOnRateLimit: true,
+      fetch: failoverFetch as unknown as typeof fetch,
+    }),
+    [],
+  );
+
   return (
-    <ConnectionProvider endpoint={endpoint}>
+    <ConnectionProvider endpoint={endpoint} config={connectionConfig}>
       <WalletProvider wallets={wallets} onError={onError} autoConnect>
         <WalletModalProvider>{children}</WalletModalProvider>
       </WalletProvider>

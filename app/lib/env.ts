@@ -24,6 +24,10 @@ export const env = {
     "NEXT_PUBLIC_SOLANA_RPC_URL",
     process.env.NEXT_PUBLIC_SOLANA_RPC_URL,
   ),
+  // Optional secondary RPC (e.g. a second Helius key) the failover layer falls
+  // back to when the primary returns 429 / "max usage reached". Empty is fine —
+  // the public cluster RPC is always used as a last-resort fallback.
+  fallbackRpcUrl: process.env.NEXT_PUBLIC_SOLANA_RPC_URL_FALLBACK || "",
   programId: process.env.NEXT_PUBLIC_MERIDIAN_PROGRAM_ID || "",
   usdcMint: process.env.NEXT_PUBLIC_USDC_MINT || "",
   appName: process.env.NEXT_PUBLIC_APP_NAME || "Meridian",
