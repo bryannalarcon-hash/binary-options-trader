@@ -12,7 +12,7 @@ import {
   IconCheck,
   fmt$,
 } from "@/components/caret";
-import { MarketStatusChip } from "@/components/MarketStatusChip";
+import { MarketOddsHero } from "@/components/MarketOddsHero";
 import { useSpotPrice, useStrikeList } from "@/lib/markets-client";
 import { useMounted } from "@/lib/use-mounted";
 import { MAG7_TICKERS, TICKER_NAME, type Ticker } from "@/lib/tickers";
@@ -66,8 +66,6 @@ export default function LandingPage() {
   const wallet = useWallet();
   const walletModal = useWalletModal();
   const connected = mounted && wallet.connected;
-
-  const featured = useFeatured("AAPL");
 
   function connectWallet() {
     if (!connected) walletModal.setVisible(true);
@@ -160,15 +158,7 @@ export default function LandingPage() {
             <Trust>Most you can lose is what you pay</Trust>
           </div>
 
-          <FeaturedMarket
-            ticker={featured.ticker}
-            strikeCents={featured.strikeCents}
-            strikeDisplay={featured.strikeDisplay}
-            yes={featured.yes}
-            spotDollars={featured.spotDollars}
-            estimated={featured.estimated}
-            loading={featured.loading}
-          />
+          <MarketOddsHero />
         </div>
       </section>
 
@@ -407,181 +397,6 @@ function Dot() {
     <span aria-hidden style={{ color: "var(--text-4)" }}>
       ·
     </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Featured market — one live market presented calmly, big Yes/No, the payoff
-// stated in a plain sentence. Mirrors the trade-screen language.
-// ---------------------------------------------------------------------------
-function FeaturedMarket({
-  ticker,
-  strikeCents,
-  strikeDisplay,
-  yes,
-  spotDollars,
-  estimated,
-  loading,
-}: {
-  ticker: Ticker;
-  strikeCents: number | null;
-  strikeDisplay: string;
-  yes: number | null;
-  spotDollars: number | null;
-  estimated: boolean;
-  loading: boolean;
-}) {
-  const no = yes != null ? 100 - yes : null;
-  const href =
-    strikeCents != null ? `/trade/${ticker}/${strikeCents}` : `/trade/${ticker}`;
-  const mark = estimated ? "~" : "";
-
-  return (
-    <Card
-      padding={24}
-      style={{
-        width: "100%",
-        maxWidth: 460,
-        marginTop: 44,
-        textAlign: "left",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          marginBottom: 14,
-        }}
-      >
-        <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>
-          A market open now
-        </span>
-        <MarketStatusChip />
-      </div>
-
-      <div
-        style={{
-          fontSize: 20,
-          fontWeight: 600,
-          letterSpacing: "-0.01em",
-          color: "var(--text)",
-          lineHeight: 1.3,
-        }}
-      >
-        Will {ticker} close at or above{" "}
-        <span className="num">{strikeDisplay}</span> today?
-      </div>
-      <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 6 }}>
-        {TICKER_NAME[ticker]} · now at{" "}
-        <span className="num" style={{ color: "var(--text-2)" }}>
-          {spotDollars != null ? fmt$(spotDollars) : loading ? "…" : "—"}
-        </span>{" "}
-        · settles 4:00 PM ET
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 12,
-          marginTop: 18,
-        }}
-      >
-        <OutcomeButton
-          href={href}
-          label="Yes"
-          sub="closes at or above"
-          cents={yes}
-          mark={mark}
-          tone="up"
-        />
-        <OutcomeButton
-          href={href}
-          label="No"
-          sub="closes below"
-          cents={no}
-          mark={mark}
-          tone="dn"
-        />
-      </div>
-
-      <div
-        style={{
-          fontSize: 12.5,
-          color: "var(--text-3)",
-          marginTop: 14,
-          lineHeight: 1.5,
-        }}
-      >
-        {yes != null ? (
-          <>
-            Buy Yes for {mark}
-            {fmtPrice(yes)} to win $1.00 if {ticker} closes at or above{" "}
-            {strikeDisplay}.
-            {estimated && " Price is an estimate until the book opens."}
-          </>
-        ) : loading ? (
-          "Loading the live price…"
-        ) : (
-          "No market is open for this stock right now."
-        )}
-      </div>
-    </Card>
-  );
-}
-
-/** Big tappable Yes/No tile that links into the market. */
-function OutcomeButton({
-  href,
-  label,
-  sub,
-  cents,
-  mark,
-  tone,
-}: {
-  href: string;
-  label: string;
-  sub: string;
-  cents: number | null;
-  mark: string;
-  tone: "up" | "dn";
-}) {
-  const color = tone === "up" ? "var(--up)" : "var(--down)";
-  const bg = tone === "up" ? "var(--up-soft)" : "var(--down-soft)";
-  const line = tone === "up" ? "var(--up-line)" : "var(--down-line)";
-  return (
-    <Link
-      href={href}
-      className="row-hover"
-      style={{
-        display: "block",
-        padding: "14px 16px",
-        borderRadius: 10,
-        background: bg,
-        border: `1px solid ${line}`,
-        textDecoration: "none",
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-        }}
-      >
-        <span style={{ fontSize: 15, fontWeight: 600, color }}>{label}</span>
-        <span
-          className="num"
-          style={{ fontSize: 22, fontWeight: 600, color }}
-        >
-          {cents != null ? `${mark}${cents}¢` : "—"}
-        </span>
-      </div>
-      <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 2 }}>
-        {sub}
-      </div>
-    </Link>
   );
 }
 

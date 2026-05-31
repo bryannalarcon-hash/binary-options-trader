@@ -71,24 +71,56 @@
   --density-pad-x:  12px;
 }
 
+/* Light theme — the DEFAULT surface (set on <html data-theme="light">).
+   Tuned for a calm, professional retail-fintech read: a near-white cool-gray
+   canvas, true-white elevated cards, crisp hairlines, near-ink body text, and
+   accent / up / down hues DEEPENED so text and fills clear ≥4.5:1 on white
+   (the stock light tokens were too pale for body/price text). */
 [data-theme="light"] {
   color-scheme: light;
-  --bg:            oklch(0.985 0.005 250);
-  --bg-elev:       oklch(1 0 0);
-  --bg-elev-2:     oklch(0.975 0.005 250);
-  --bg-hover:      oklch(0.96 0.005 250);
-  --line:          oklch(0.90 0.008 250);
-  --line-soft:     oklch(0.93 0.008 250);
-  --line-strong:   oklch(0.82 0.010 250);
-  --text:          oklch(0.16 0.012 250);
-  --text-2:        oklch(0.36 0.012 250);
-  --text-3:        oklch(0.52 0.012 250);
-  --text-4:        oklch(0.68 0.012 250);
 
+  /* Backgrounds — page canvas slightly cool-gray, cards lift to true white */
+  --bg:            oklch(0.984 0.004 255);
+  --bg-elev:       oklch(1 0 0);
+  --bg-elev-2:     oklch(0.967 0.005 255);
+  --bg-hover:      oklch(0.955 0.006 255);
+
+  /* Lines — hairlines that read on white without going muddy */
+  --line:          oklch(0.905 0.006 255);
+  --line-soft:     oklch(0.935 0.005 255);
+  --line-strong:   oklch(0.84 0.008 255);
+
+  /* Text — near-ink, not pure black; ramps stay ≥4.5:1 down to --text-3 */
+  --text:          oklch(0.24 0.014 260);
+  --text-2:        oklch(0.42 0.013 260);
+  --text-3:        oklch(0.52 0.012 260);
+  --text-4:        oklch(0.63 0.011 260);
+
+  /* Accent — a confident cobalt; white ink on it clears ~4.8:1 */
+  --accent:        oklch(0.55 0.17 252);
+  --accent-2:      oklch(0.48 0.17 252);
+  --accent-soft:   oklch(0.55 0.17 252 / 0.10);
+  --accent-line:   oklch(0.55 0.17 252 / 0.26);
   --accent-ink:    oklch(0.99 0 0);
-  --up-soft:       oklch(0.80 0.16 158 / 0.18);
-  --down-soft:     oklch(0.72 0.20 25 / 0.16);
-  --accent-soft:   oklch(0.72 0.16 245 / 0.16);
+
+  /* Up / Down — deepened so price/label text passes on white; soft tints stay calm */
+  --up:            oklch(0.52 0.15 156);
+  --up-soft:       oklch(0.60 0.15 156 / 0.12);
+  --up-line:       oklch(0.55 0.15 156 / 0.28);
+  --up-ink:        oklch(0.99 0 0);
+
+  --down:          oklch(0.545 0.205 27);
+  --down-soft:     oklch(0.62 0.21 27 / 0.10);
+  --down-line:     oklch(0.58 0.21 27 / 0.28);
+  --down-ink:      oklch(0.99 0 0);
+
+  --warn:          oklch(0.62 0.13 72);
+}
+
+/* Cards earn a faint lift on the light canvas (skipped on dark). */
+[data-theme="light"] .card,
+[data-theme="light"] .panel {
+  box-shadow: 0 1px 2px oklch(0.5 0.02 260 / 0.04), 0 1px 3px oklch(0.5 0.02 260 / 0.05);
 }
 
 /* ============================================================
@@ -526,6 +558,12 @@ textarea { height: auto; padding: 10px 12px; }
 @keyframes shimmer {
   from { background-position: 0% 0%; }
   to { background-position: 100% 0%; }
+}
+
+/* Hero: the implied-distribution curve draws itself in on first paint. */
+@keyframes drawCurve {
+  from { stroke-dashoffset: var(--draw-len, 1200); }
+  to   { stroke-dashoffset: 0; }
 }
 
 /* Wallet Adapter style overrides (so the wallet-adapter modal matches caret) */

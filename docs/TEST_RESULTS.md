@@ -311,3 +311,17 @@ and the anchor suite (§1–§4), not the browser.
 - Gating comments + `MERIDIAN_RUN_HARNESS_SUITES` opt-in in
   `tests/anchor/edge-cases.test.ts` and `tests/anchor/integration.test.ts`.
 - This report.
+
+---
+
+## 7. Landing market-odds hero — implied-distribution math
+
+The landing hero (`app/components/MarketOddsHero.tsx`) draws a live risk-neutral
+PDF from the strike chain (Breeden-Litzenberger). The pure math is extracted to
+`app/lib/implied-distribution.ts` and locked by
+`tests/unit/implied-distribution.test.ts` (4 cases): `<2` strikes -> null, the
+implied mean as the probability-weighted center (symmetric chain -> exact center
+$120, std ~ $11.18), non-monotonic-chain clipping (no negative density; mean/+-1sigma
+stay inside the observed range), and unsorted-input sorting. Run:
+`cd tests && node_modules/.bin/mocha -t 60000 'unit/implied-distribution.test.ts'`.
+Full unit suite: **45 passing**.

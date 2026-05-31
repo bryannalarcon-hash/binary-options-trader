@@ -25,7 +25,7 @@ export const DEFAULT_SETTINGS: MeridianSettings = {
   autoRedeem: true,
   confirmTradeModal: true,
   slippageBps: 100,
-  theme: "dark",
+  theme: "light",
   tradesCompleted: 0,
   defaultBetSizeUsd: 5,
 };
