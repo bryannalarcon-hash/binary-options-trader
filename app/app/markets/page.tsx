@@ -88,7 +88,15 @@ export default function MarketsPage() {
     : "";
 
   return (
-    <div className="page">
+    <div className="page" style={{ position: "relative", isolation: "isolate" }}>
+      {/* Decorative aurora — a more pronounced variant than the landing's.
+          `isolation:isolate` on the page makes the z-index:-1 aura sit above
+          the body background but behind the content, no per-child stacking. */}
+      <div className="hero-aura strong" aria-hidden>
+        <span className="blob b1" />
+        <span className="blob b2" />
+        <span className="blob b3" />
+      </div>
       {/* ───────────────────────── HEADER ─────────────────────────
           Plain, calm intro: one title, one supporting line, the live
           market-status chip. No uppercase eyebrow, no dense metadata. */}

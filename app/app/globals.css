@@ -522,6 +522,23 @@ textarea { height: auto; padding: 10px 12px; }
   background: linear-gradient(90deg, var(--accent), oklch(0.74 0.12 205), var(--up));
 }
 
+/* Stronger aura variant — used on the markets page. More saturated + opaque
+   and taller than the landing's calm version, and pinned at z-index:-1 so it
+   pours behind all page content without per-child stacking. Dark gets its own
+   (more vivid) tokens; the light override wins on the light theme by specificity. */
+.hero-aura.strong {
+  z-index: -1;
+  height: 720px;
+  --aura-1: oklch(0.70 0.18 250 / 0.62);
+  --aura-2: oklch(0.78 0.14 205 / 0.58);
+  --aura-3: oklch(0.80 0.17 162 / 0.48);
+}
+[data-theme="light"] .hero-aura.strong {
+  --aura-1: oklch(0.66 0.18 252 / 0.62);
+  --aura-2: oklch(0.76 0.14 205 / 0.56);
+  --aura-3: oklch(0.80 0.16 162 / 0.46);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .hero-aura .blob { animation: none !important; }
 }
