@@ -23,13 +23,14 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AnchorProvider, Program, type Idl, BN, EventParser, BorshCoder } from "@coral-xyz/anchor";
 import { useConnection } from "@solana/wallet-adapter-react";
 import {
   Keypair,
   PublicKey,
   Transaction,
+  type Connection,
   type VersionedTransaction,
   type Logs,
 } from "@solana/web3.js";
@@ -182,83 +183,120 @@ function decodeOnChainMarket(entry: {
  *   - loading: true until the first read settles
  *   - error:   true if the program is not configured or a read threw
  */
+// ---------------------------------------------------------------------------
+// Shared all-markets store
+//
+// `useAllMarkets` is mounted by many components at once (the landing alone uses
+// it ~8×: the hero + every market row). Previously each instance ran its OWN
+// `getProgramAccounts` (`market.all()`) on a 10s timer — 8 credit-heavy reads
+// every 10s, which exhausts a free-tier devnet RPC ("max usage reached"). This
+// module-level store collapses them into ONE fetch loop shared via
+// `useSyncExternalStore`: a single `market.all()` every 30s no matter how many
+// components subscribe. The loop starts on the first subscriber and stops when
+// the last unsubscribes. The `markets` array keeps a stable reference until the
+// decoded content actually changes (so downstream memoization doesn't churn,
+// and `useSyncExternalStore` doesn't loop on an unstable snapshot).
+// ---------------------------------------------------------------------------
+const ALL_MARKETS_POLL_MS = 30_000;
+const EMPTY_MARKETS: Market[] = Object.freeze([]) as unknown as Market[];
+
+interface AllMarketsSnapshot {
+  markets: Market[];
+  loading: boolean;
+  error: boolean;
+}
+
+let amSnapshot: AllMarketsSnapshot = { markets: EMPTY_MARKETS, loading: true, error: false };
+let amSig = "";
+let amConnection: Connection | null = null;
+let amTimer: ReturnType<typeof setInterval> | null = null;
+let amInFlight = false;
+const amListeners = new Set<() => void>();
+
+/** Replace the snapshot (new reference) only when something actually changed. */
+function amSet(next: Partial<AllMarketsSnapshot>): void {
+  const merged: AllMarketsSnapshot = { ...amSnapshot, ...next };
+  if (
+    merged.markets === amSnapshot.markets &&
+    merged.loading === amSnapshot.loading &&
+    merged.error === amSnapshot.error
+  ) {
+    return;
+  }
+  amSnapshot = merged;
+  for (const l of amListeners) l();
+}
+
+async function amRefresh(): Promise<void> {
+  if (amInFlight || !amConnection) return;
+  amInFlight = true;
+  try {
+    const built = makeReadOnlyProgram(amConnection);
+    if (!built) {
+      amSet({ markets: EMPTY_MARKETS, loading: false, error: true });
+      return;
+    }
+    // Race the getProgramAccounts read against a bounded timeout so a hung
+    // devnet RPC can't pin loading=true forever (honest error, never a fake []).
+    const raw = await withTimeout<
+      | Array<{ publicKey: PublicKey; account: Record<string, unknown> }>
+      | typeof MARKETS_TIMEOUT
+    >(
+      (built.program.account as any).market.all(),
+      MARKETS_READ_TIMEOUT_MS,
+      MARKETS_TIMEOUT,
+    );
+    if (raw === MARKETS_TIMEOUT) {
+      amSet({ loading: false, error: true }); // keep last-good markets; retry next poll
+      return;
+    }
+    const decoded = raw
+      .map((r) => decodeOnChainMarket(r))
+      .filter((m): m is Market => m !== null);
+    const sig = decoded
+      .map((m) => `${m.address}:${m.strike}:${m.settled ? 1 : 0}:${m.totalPairsMinted}`)
+      .sort()
+      .join("|");
+    if (sig !== amSig) {
+      amSig = sig;
+      amSet({ markets: decoded, loading: false, error: false });
+    } else {
+      amSet({ loading: false, error: false });
+    }
+  } catch {
+    amSet({ loading: false, error: true }); // keep last-good markets
+  } finally {
+    amInFlight = false;
+  }
+}
+
+function makeAmSubscribe(connection: Connection) {
+  return (listener: () => void): (() => void) => {
+    amListeners.add(listener);
+    amConnection = connection;
+    if (amTimer == null) {
+      void amRefresh();
+      amTimer = setInterval(() => void amRefresh(), ALL_MARKETS_POLL_MS);
+    }
+    return () => {
+      amListeners.delete(listener);
+      if (amListeners.size === 0 && amTimer != null) {
+        clearInterval(amTimer);
+        amTimer = null;
+      }
+    };
+  };
+}
+
+/**
+ * Hook: all MAG7 markets. Backed by ONE shared `getProgramAccounts` loop (see
+ * the store above) regardless of how many components mount it.
+ */
 export function useAllMarkets(): { markets: Market[]; loading: boolean; error: boolean } {
   const { connection } = useConnection();
-  const [markets, setMarkets] = useState<Market[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  // Stable content signature: we only swap the `markets` array reference when
-  // the decoded content actually changes, so downstream effects/renders don't
-  // churn (and flicker) on every 10s poll that returns identical data.
-  const sigRef = useRef<string>("");
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function refresh() {
-      if (cancelled) return;
-      const built = makeReadOnlyProgram(connection);
-      if (!built) {
-        if (!cancelled) {
-          setMarkets([]);
-          setError(true);
-          setLoading(false);
-        }
-        return;
-      }
-      try {
-        // Race the getProgramAccounts read against a bounded timeout so a hung
-        // devnet RPC can't pin loading=true forever. On timeout we get the
-        // sentinel → treated as a read error (honest empty/error state), never
-        // a fake empty market list.
-        const raw = await withTimeout<
-          | Array<{ publicKey: PublicKey; account: Record<string, unknown> }>
-          | typeof MARKETS_TIMEOUT
-        >(
-          (built.program.account as any).market.all(),
-          MARKETS_READ_TIMEOUT_MS,
-          MARKETS_TIMEOUT,
-        );
-        if (cancelled) return;
-        if (raw === MARKETS_TIMEOUT) {
-          // Read didn't settle in time — surface a terminal error state. Keep
-          // any last-good markets we already had; the 10s poll will retry.
-          setError(true);
-          setLoading(false);
-          return;
-        }
-        const decoded = raw
-          .map((r) => decodeOnChainMarket(r))
-          .filter((m): m is Market => m !== null);
-        if (cancelled) return;
-        const sig = decoded
-          .map((m) => `${m.address}:${m.strike}:${m.settled ? 1 : 0}:${m.totalPairsMinted}`)
-          .sort()
-          .join("|");
-        if (sig !== sigRef.current) {
-          sigRef.current = sig;
-          setMarkets(decoded);
-        }
-        setError(false);
-        setLoading(false);
-      } catch {
-        if (!cancelled) {
-          // Keep last-good markets if we had them; flag the error.
-          setError(true);
-          setLoading(false);
-        }
-      }
-    }
-
-    void refresh();
-    const id = window.setInterval(() => void refresh(), 10_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [connection]);
-
-  return { markets, loading, error };
+  const subscribe = useMemo(() => makeAmSubscribe(connection), [connection]);
+  const getSnapshot = () => amSnapshot;
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 /** Hook: markets for one ticker. */
@@ -370,7 +408,10 @@ export function useSpotPrice(ticker: Ticker): {
     } catch {
       /* WS unavailable — poll backstop below still runs */
     }
-    const id = window.setInterval(() => void refresh(), 10_000);
+    // Oracle spot poll: slowed 10s → 30s. One getAccountInfo per ticker, mounted
+    // ~8× on the landing; the WS `onAccountChange` above still delivers live spot
+    // moves, so this is just a backstop for a dropped socket.
+    const id = window.setInterval(() => void refresh(), 30_000);
 
     return () => {
       cancelled = true;
@@ -709,39 +750,36 @@ export function useRecentTrades(
  * Also returns the summed resting size as a rough liquidity figure (NOT used as
  * "volume" — volume comes only from OrderMatched fills).
  */
-async function readBookMid(
-  program: Program,
-  programId: PublicKey,
-  marketPk: PublicKey,
-): Promise<{ yesCents: number } | null> {
-  const ob = PublicKey.findProgramAddressSync(
+/** Order-book PDA for a market. */
+function orderBookPda(programId: PublicKey, marketPk: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
     [ORDERBOOK_SEED, marketPk.toBuffer()],
     programId,
   )[0];
-  try {
-    const raw = (await (program.account as any).orderBook.fetch(ob)) as {
-      bids: Array<{ owner: PublicKey; price: number; size: BN }>;
-      asks: Array<{ owner: PublicKey; price: number; size: BN }>;
-    };
-    let bestBid = -1;
-    let bestAsk = -1;
-    for (const b of raw.bids ?? []) {
-      if (!b || b.owner.equals(PublicKey.default) || b.size.isZero()) continue;
-      if (b.price > bestBid) bestBid = b.price;
-    }
-    for (const a of raw.asks ?? []) {
-      if (!a || a.owner.equals(PublicKey.default) || a.size.isZero()) continue;
-      if (bestAsk < 0 || a.price < bestAsk) bestAsk = a.price;
-    }
-    if (bestBid >= 0 && bestAsk >= 0) {
-      return { yesCents: Math.round((bestBid + bestAsk) / 2) };
-    }
-    if (bestBid >= 0) return { yesCents: bestBid };
-    if (bestAsk >= 0) return { yesCents: bestAsk };
-    return null; // book exists but empty
-  } catch {
-    return null; // book PDA missing
+}
+
+/** Best bid/ask mid (yes cents) from a decoded order book, or null if empty. */
+function bookMidFromDecoded(
+  raw: {
+    bids?: Array<{ owner: PublicKey; price: number; size: BN }>;
+    asks?: Array<{ owner: PublicKey; price: number; size: BN }>;
+  } | null,
+): { yesCents: number } | null {
+  if (!raw) return null;
+  let bestBid = -1;
+  let bestAsk = -1;
+  for (const b of raw.bids ?? []) {
+    if (!b || b.owner.equals(PublicKey.default) || b.size.isZero()) continue;
+    if (b.price > bestBid) bestBid = b.price;
   }
+  for (const a of raw.asks ?? []) {
+    if (!a || a.owner.equals(PublicKey.default) || a.size.isZero()) continue;
+    if (bestAsk < 0 || a.price < bestAsk) bestAsk = a.price;
+  }
+  if (bestBid >= 0 && bestAsk >= 0) return { yesCents: Math.round((bestBid + bestAsk) / 2) };
+  if (bestBid >= 0) return { yesCents: bestBid };
+  if (bestAsk >= 0) return { yesCents: bestAsk };
+  return null; // book exists but empty
 }
 
 /**
@@ -864,10 +902,26 @@ export function useStrikeList(ticker: Ticker): {
     }
 
     async function build() {
+      // Batch ALL of this ticker's order-book reads into ONE getMultipleAccounts
+      // (Anchor `fetchMultiple`) instead of one getAccountInfo per strike — the
+      // book reads were the largest remaining RPC-credit sink after the shared
+      // market store. Order of results matches `active`.
+      const obPdas = active.map((m) =>
+        orderBookPda(built!.programId, new PublicKey(m.address)),
+      );
+      let books: Array<{ bids?: any[]; asks?: any[] } | null>;
+      try {
+        books = (await (built!.program.account as any).orderBook.fetchMultiple(
+          obPdas,
+        )) as Array<{ bids?: any[]; asks?: any[] } | null>;
+      } catch {
+        // Whole batch failed (RPC error) — fall through to estimates/omit.
+        books = obPdas.map(() => null);
+      }
+
       const out: StrikeRow[] = [];
-      for (const m of active) {
-        const marketPk = new PublicKey(m.address);
-        const mid = await readBookMid(built!.program, built!.programId, marketPk);
+      active.forEach((m, i) => {
+        const mid = bookMidFromDecoded(books[i] ?? null);
         let yesCents: number | null = null;
         let estimated = false;
         if (mid) {
@@ -881,7 +935,7 @@ export function useStrikeList(ticker: Ticker): {
           estimated = true;
         } else {
           // No book, no oracle — omit rather than invent a price.
-          continue;
+          return;
         }
         out.push({
           strike: m.strike,
@@ -890,7 +944,7 @@ export function useStrikeList(ticker: Ticker): {
           volume: volumeRef.current.get(m.strike) ?? 0,
           estimated,
         });
-      }
+      });
       out.sort((a, b) => a.strike - b.strike);
       if (cancelled) return;
       setRows(out);
@@ -899,7 +953,12 @@ export function useStrikeList(ticker: Ticker): {
     }
 
     void build();
-    const id = window.setInterval(() => void build(), 5_000);
+    // Book-mid refresh: slowed 5s → 20s. Each build() reads every strike's order
+    // book (getAccountInfo per market) and runs once per mounted strike chain
+    // (~8 on the landing); 5s polling was a major contributor to RPC-credit
+    // exhaustion. 20s is plenty for a calm browse view; the trade page keeps its
+    // live onAccountChange book subscription for real-time quoting.
+    const id = window.setInterval(() => void build(), 20_000);
     return () => {
       cancelled = true;
       window.clearInterval(id);
