@@ -77,7 +77,13 @@ export default function LandingPage() {
           Plain-language value prop a non-expert grasps in 5 seconds,
           paired with one live featured market. Calm, centered, generous
           whitespace — matching the redesigned trade screen. */}
-      <section style={{ padding: "72px 0 8px" }}>
+      <section style={{ padding: "72px 0 8px", position: "relative" }}>
+        {/* Purely decorative aurora — drifting colour behind the hero. */}
+        <div className="hero-aura" aria-hidden>
+          <span className="blob b1" />
+          <span className="blob b2" />
+          <span className="blob b3" />
+        </div>
         <div
           className="page"
           style={{
@@ -87,6 +93,8 @@ export default function LandingPage() {
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
+            position: "relative",
+            zIndex: 1,
           }}
         >
           <h1
@@ -166,6 +174,7 @@ export default function LandingPage() {
           One scannable row per MAG7 ticker — spot, the at-the-money
           price, and a clear Yes/No, each an obvious click into the market. */}
       <section className="page" style={{ paddingTop: 56, maxWidth: 760 }}>
+        <hr className="divider-grad" style={{ marginBottom: 32 }} />
         <div
           style={{
             display: "flex",
@@ -218,6 +227,7 @@ export default function LandingPage() {
       {/* ───────────────────────── HOW IT WORKS ─────────────────────────
           Three calm, plain-language steps. No eyebrow, no 01/02/03 markers. */}
       <section className="page" style={{ paddingTop: 56, maxWidth: 920 }}>
+        <hr className="divider-grad" style={{ marginBottom: 32 }} />
         <h2
           style={{
             margin: "0 0 24px",

@@ -56,13 +56,14 @@ export function MarketOddsHero() {
 
   return (
     <div
-      className="card"
+      className="card edge-accent"
       style={{
         width: "100%",
         maxWidth: 760,
         marginTop: 44,
-        padding: "20px 24px 24px",
+        padding: "22px 24px 24px",
         textAlign: "left",
+        overflow: "hidden",
       }}
     >
       {/* Ticker switcher — the interactive "alive" affordance */}
@@ -216,7 +217,7 @@ function OddsBar({
             position: "absolute",
             inset: 0,
             width: `${fill}%`,
-            background: "var(--up)",
+            background: "linear-gradient(90deg, oklch(0.62 0.15 162), var(--up))",
             borderRadius: 999,
             transition: "width .7s cubic-bezier(0.22, 1, 0.36, 1)",
           }}

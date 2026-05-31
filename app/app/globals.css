@@ -34,6 +34,11 @@
   --accent-line:   oklch(0.72 0.16 245 / 0.32);
   --accent-ink:    oklch(0.12 0.04 245);
 
+  /* Decorative aurora blobs (purely visual hero backdrop) — vivid on dark */
+  --aura-1:        oklch(0.72 0.16 245 / 0.45);
+  --aura-2:        oklch(0.78 0.13 200 / 0.40);
+  --aura-3:        oklch(0.80 0.16 158 / 0.30);
+
   /* Up / Down semantic */
   --up:            oklch(0.80 0.16 158);
   --up-soft:       oklch(0.80 0.16 158 / 0.12);
@@ -115,10 +120,20 @@
   --down-ink:      oklch(0.99 0 0);
 
   --warn:          oklch(0.62 0.13 72);
+
+  /* Aurora on the light canvas — present and clearly visible, still calm */
+  --aura-1:        oklch(0.66 0.17 252 / 0.46);
+  --aura-2:        oklch(0.78 0.13 205 / 0.42);
+  --aura-3:        oklch(0.80 0.15 162 / 0.32);
 }
 
-/* Cards earn a faint lift on the light canvas (skipped on dark). */
-[data-theme="light"] .card,
+/* Light mode: give surfaces firmer separation on the near-white canvas — a
+   defined hairline, a faint top-to-bottom surface gradient, and a soft lift. */
+[data-theme="light"] .card {
+  border-color: var(--line);
+  background: linear-gradient(180deg, oklch(1 0 0), oklch(0.99 0.003 255));
+  box-shadow: 0 1px 2px oklch(0.5 0.02 260 / 0.05), 0 4px 14px oklch(0.5 0.02 260 / 0.05);
+}
 [data-theme="light"] .panel {
   box-shadow: 0 1px 2px oklch(0.5 0.02 260 / 0.04), 0 1px 3px oklch(0.5 0.02 260 / 0.05);
 }
@@ -436,6 +451,79 @@ textarea { height: auto; padding: 10px 12px; }
   background:
     radial-gradient(60% 60% at 20% 10%, var(--accent-soft), transparent 60%),
     radial-gradient(50% 50% at 90% 30%, oklch(0.6 0.18 215 / 0.10), transparent 65%);
+}
+
+/* ============================================================
+ * DECORATIVE AURORA — purely visual hero backdrop.
+ * Three blurred, slowly-drifting colour blobs behind the hero. No data, no
+ * meaning; just depth. Calm cool tones (cobalt / cyan / green), never the
+ * purple-glow DeFi cliché. Frozen under prefers-reduced-motion.
+ * ============================================================ */
+.hero-aura {
+  position: absolute;
+  inset: -40px 0 auto 0;
+  height: 660px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  -webkit-mask-image: linear-gradient(to bottom, #000 52%, transparent);
+  mask-image: linear-gradient(to bottom, #000 52%, transparent);
+}
+.hero-aura .blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(64px);
+  will-change: transform;
+}
+.hero-aura .b1 {
+  width: 540px; height: 540px; left: -4%; top: -140px;
+  background: radial-gradient(circle at 50% 50%, var(--aura-1), transparent 70%);
+  animation: auraA 28s ease-in-out infinite alternate;
+}
+.hero-aura .b2 {
+  width: 460px; height: 460px; right: -2%; top: -100px;
+  background: radial-gradient(circle at 50% 50%, var(--aura-2), transparent 70%);
+  animation: auraB 33s ease-in-out infinite alternate;
+}
+.hero-aura .b3 {
+  width: 520px; height: 520px; left: 40%; top: 60px;
+  background: radial-gradient(circle at 50% 50%, var(--aura-3), transparent 70%);
+  animation: auraC 38s ease-in-out infinite alternate;
+}
+@keyframes auraA {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(70px, 46px, 0) scale(1.18); }
+}
+@keyframes auraB {
+  from { transform: translate3d(0, 0, 0) scale(1.06); }
+  to   { transform: translate3d(-56px, 34px, 0) scale(0.9); }
+}
+@keyframes auraC {
+  from { transform: translate3d(0, 0, 0) scale(1); }
+  to   { transform: translate3d(26px, -46px, 0) scale(1.14); }
+}
+
+/* Gradient hairline divider — fades in at the ends, stronger than a flat rule. */
+.divider-grad {
+  height: 1px;
+  border: 0;
+  margin: 0;
+  background: linear-gradient(to right, transparent, var(--line-strong), transparent);
+}
+
+/* Gradient top-accent for a feature surface — a thin tri-tone edge. */
+.edge-accent { position: relative; }
+.edge-accent::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: linear-gradient(90deg, var(--accent), oklch(0.74 0.12 205), var(--up));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-aura .blob { animation: none !important; }
 }
 
 /* Live chips */
