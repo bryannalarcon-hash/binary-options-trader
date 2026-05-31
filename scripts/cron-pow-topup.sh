@@ -9,10 +9,11 @@
 #      devnet-pow, then transfer to the underfunded wallets.
 #   3. Idempotent: if both wallets already above threshold, exits in 1 second.
 #
-# Suggested cron entry (run at 2 AM local daily):
-#   0 2 * * * /home/bryann/gauntlet/meridian/scripts/cron-pow-topup.sh >> /home/bryann/gauntlet/meridian/.cron-topup.log 2>&1
+# Suggested cron entry (run at 2 AM local daily). Set HELIUS_DEVNET_RPC_URL for a
+# faster keyed RPC (optional — falls back to public devnet):
+#   0 2 * * * HELIUS_DEVNET_RPC_URL='https://devnet.helius-rpc.com/?api-key=YOUR_KEY' /home/bryann/gauntlet/meridian/scripts/cron-pow-topup.sh >> /home/bryann/gauntlet/meridian/.cron-topup.log 2>&1
 #
-# Manual run: ./scripts/cron-pow-topup.sh
+# Manual run: ./scripts/cron-pow-topup.sh   (or: HELIUS_DEVNET_RPC_URL=... ./scripts/cron-pow-topup.sh)
 # =============================================================================
 
 set -euo pipefail
@@ -33,8 +34,10 @@ MAX_MINE_SOL=10
 DIFFICULTY=3
 REWARD=0.02
 
-# RPC — Helius is faster, public devnet is the fallback
-RPC=${RPC:-https://devnet.helius-rpc.com/?api-key=e00e7579-9fd7-44b7-8fd4-ab91611197f3}
+# RPC — provide a keyed endpoint (faster) via the RPC or HELIUS_DEVNET_RPC_URL
+# environment variable, e.g. export it in the crontab. NEVER hardcode an API key
+# here. Falls back to the public devnet RPC when neither is set.
+RPC=${RPC:-${HELIUS_DEVNET_RPC_URL:-https://api.devnet.solana.com}}
 RPC_FALLBACK=https://api.devnet.solana.com
 
 # ----- PATH setup (cron has minimal PATH) -----
