@@ -9,8 +9,10 @@
  *   - `useHoldingForMarket` reads the YES + NO ATA balances for one (ticker,
  *     strike).
  *   - `useUserHistory` seeds from the user's recent program signatures, then
- *     live-appends parsed `PairMinted`, `PairRedeemed`, `OrderPlaced`,
- *     `OrderMatched`, `OrderCancelled`, `Redeemed` events.
+ *     live-appends program events. Per-tx event decoding lives in
+ *     history-intent.ts (buildTxHistoryRows), which reconstructs user INTENT
+ *     (Sold Yes / Bought No) from raw book events and collapses composite
+ *     No-trades (mint+sell / buy+redeem) into single rows.
  *
  * Honest states everywhere: empty positions / empty history when there's
  * nothing on-chain; `loading` while reading; `error` on RPC failure. We NEVER
@@ -47,6 +49,7 @@ import type { Market, Side } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
 import { shouldStopLoading, withTimeout } from "./loading-state";
+import { buildTxHistoryRows } from "./history-intent";
 import { pickMarketForStrike } from "./market-select";
 import { useAllMarkets } from "./markets-client";
 import { buildPositions } from "./positions-build";
@@ -489,12 +492,6 @@ function aggregate(active: Position[], settled: Position[]): PortfolioSummary {
 // History — subscribe to program events + seed from signature scan.
 // ---------------------------------------------------------------------------
 
-function mapTakerSideToUiSide(takerSide: number): Side {
-  return takerSide === 0 ? "yes" : "no";
-}
-function mapOrderSideToUiSide(side: number): Side {
-  return side === 0 ? "yes" : "no";
-}
 function marketLookup(markets: Market[]): Map<string, { ticker: Ticker; strike: number }> {
   const map = new Map<string, { ticker: Ticker; strike: number }>();
   for (const m of markets) {
@@ -547,143 +544,23 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean; er
     );
     const myKey = publicKey.toBase58();
 
-    function pushIfMine(ev: { name: string; data: any }, sig: string): void {
-      const name = ev.name;
-      const d = ev.data ?? {};
-      const ts = Date.now();
-      const tickerStrike = d.market
-        ? lookup.get((d.market as PublicKey).toBase58())
-        : null;
-      if (!tickerStrike) return; // unknown market — skip
-
-      let row: HistoryEvent | null = null;
-
-      switch (name) {
-        case "PairMinted":
-        case "pairMinted": {
-          if ((d.user as PublicKey)?.toBase58() !== myKey) return;
-          row = {
-            ts,
-            type: "mint_pair",
-            ticker: tickerStrike.ticker,
-            strike: tickerStrike.strike,
-            side: null,
-            quantity: Number((d.amountPairs as BN).toString()),
-            price: 100,
-            feeCents: 0,
-            status: "filled",
-            txSig: sig,
-          };
-          break;
-        }
-        case "PairRedeemed":
-        case "pairRedeemed": {
-          if ((d.user as PublicKey)?.toBase58() !== myKey) return;
-          row = {
-            ts,
-            type: "redeem_pair",
-            ticker: tickerStrike.ticker,
-            strike: tickerStrike.strike,
-            side: null,
-            quantity: Number((d.amountPairs as BN).toString()),
-            price: 100,
-            feeCents: 0,
-            status: "filled",
-            txSig: sig,
-          };
-          break;
-        }
-        case "OrderPlaced":
-        case "orderPlaced": {
-          if ((d.user as PublicKey)?.toBase58() !== myKey) return;
-          const side = mapOrderSideToUiSide(Number(d.side));
-          row = {
-            ts,
-            type: Number(d.side) === 0 ? "buy" : "sell",
-            ticker: tickerStrike.ticker,
-            strike: tickerStrike.strike,
-            side,
-            quantity: Number((d.size as BN).toString()),
-            price: Number(d.price),
-            feeCents: 0,
-            status: "filled",
-            txSig: sig,
-          };
-          break;
-        }
-        case "OrderMatched":
-        case "orderMatched": {
-          const takerKey = (d.taker as PublicKey)?.toBase58();
-          const makerKey = (d.maker as PublicKey)?.toBase58();
-          if (takerKey !== myKey && makerKey !== myKey) return;
-          const isTaker = takerKey === myKey;
-          const takerSideNum = Number(d.takerSide);
-          const mySide: Side = isTaker
-            ? mapTakerSideToUiSide(takerSideNum)
-            : takerSideNum === 0
-              ? "no"
-              : "yes";
-          row = {
-            ts,
-            type: takerSideNum === 0 ? "buy" : "sell",
-            ticker: tickerStrike.ticker,
-            strike: tickerStrike.strike,
-            side: mySide,
-            quantity: Number((d.size as BN).toString()),
-            price: Number(d.price),
-            feeCents: 0,
-            status: "filled",
-            txSig: sig,
-          };
-          break;
-        }
-        case "OrderCancelled":
-        case "orderCancelled": {
-          if ((d.user as PublicKey)?.toBase58() !== myKey) return;
-          row = {
-            ts,
-            type: Number(d.side) === 0 ? "buy" : "sell",
-            ticker: tickerStrike.ticker,
-            strike: tickerStrike.strike,
-            side: mapOrderSideToUiSide(Number(d.side)),
-            quantity: Number((d.returnedSize as BN).toString()),
-            price: Number(d.returnedPrice),
-            feeCents: 0,
-            status: "cancelled",
-            txSig: sig,
-          };
-          break;
-        }
-        case "Redeemed":
-        case "redeemed": {
-          if ((d.user as PublicKey)?.toBase58() !== myKey) return;
-          const sideNum = Number(d.side);
-          row = {
-            ts,
-            type: "redeem",
-            ticker: tickerStrike.ticker,
-            strike: tickerStrike.strike,
-            side: sideNum === 0 ? "yes" : "no",
-            quantity: Number((d.amountBurned as BN).toString()),
-            price:
-              Number((d.amountBurned as BN).toString()) === 0
-                ? 0
-                : Math.round(
-                    Number((d.usdcPaid as BN).toString()) /
-                      (Number((d.amountBurned as BN).toString()) * 10_000),
-                  ),
-            feeCents: 0,
-            status: "filled",
-            txSig: sig,
-          };
-          break;
-        }
-        default:
-          return;
-      }
-
-      if (!row) return;
-      const next = [row, ...eventsRef.current].slice(0, 200);
+    // Translate ONE transaction's events into user-intent rows (Sold Yes /
+    // Bought No, composites collapsed) — see history-intent.ts for the rules.
+    // `tsOverride` carries blockTime (ms) for back-filled txs so reloads don't
+    // restamp old trades with "now".
+    function pushTxEvents(
+      evs: Array<{ name: string; data: any }>,
+      sig: string,
+      tsOverride?: number,
+    ): void {
+      const rows = buildTxHistoryRows(evs, {
+        myKey,
+        txSig: sig,
+        ts: tsOverride ?? Date.now(),
+        lookupMarket: (addr) => lookup.get(addr),
+      });
+      if (rows.length === 0) return;
+      const next = [...rows, ...eventsRef.current].slice(0, 200);
       eventsRef.current = next;
       if (!cancelled) setEvents(next);
     }
@@ -718,9 +595,11 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean; er
             );
             const logs = tx?.meta?.logMessages;
             if (!logs) continue;
-            for (const ev of parser.parseLogs(logs)) {
-              pushIfMine(ev, s.signature);
-            }
+            pushTxEvents(
+              [...parser.parseLogs(logs)],
+              s.signature,
+              tx?.blockTime != null ? tx.blockTime * 1000 : undefined,
+            );
           } catch {
             /* skip this sig */
           }
@@ -739,9 +618,7 @@ export function useUserHistory(): { events: HistoryEvent[]; loading: boolean; er
         (logs: Logs) => {
           if (cancelled || !logs.logs) return;
           try {
-            for (const ev of parser.parseLogs(logs.logs)) {
-              pushIfMine(ev, logs.signature ?? "");
-            }
+            pushTxEvents([...parser.parseLogs(logs.logs)], logs.signature ?? "");
           } catch {
             /* non-fatal */
           }

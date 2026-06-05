@@ -346,3 +346,26 @@ latest-expiry among live duplicates, latest-settled fallback when all are
 settled, exact ticker/strike matching + null when absent. Run:
 `cd tests && node_modules/.bin/mocha -t 60000 'unit/market-select.test.ts'`.
 Full unit suite: **53 passing**; `tsc --noEmit` clean.
+
+---
+
+## 9. History mislabeled "Sell Yes" as "Sold No" — intent decoding regression
+
+**Bug (2026-06-05):** selling Yes showed in History as "Sold No · below strike".
+The CLOB is quoted in YES terms (on-chain `OrderSide`: Bid = buy YES, Ask =
+sell YES), but the client decoder mapped book-side straight to outcome
+(bid→"yes", ask→"no"), so every ask rendered as a No trade. Same conflation
+corrupted cost basis (a Yes sell reduced a nonexistent No position), maker
+fills took the taker's direction, composite No-trades (Buy No = mint_pair +
+sell YES; Sell No = buy YES + redeem_pair) leaked plumbing as separate rows,
+and back-filled rows were stamped with page-load time instead of blockTime.
+
+**Fix:** pure tx-scoped translator `buildTxHistoryRows` in
+`app/lib/history-intent.ts` — reconstructs user intent from one transaction's
+events (ask+PairMinted→Bought No @100−p; bid+PairRedeemed→Sold No @100−p;
+otherwise the book action IS the intent), inverts maker side+direction, and
+suppresses consumed pair rows. `useUserHistory` now feeds whole-tx event
+batches and passes blockTime for back-fill. Locked by
+`tests/unit/history-intent.test.ts` (8 cases). Run:
+`cd tests && node_modules/.bin/mocha -t 60000 'unit/history-intent.test.ts'`.
+Full unit suite: **61 passing**; `tsc --noEmit` clean.
