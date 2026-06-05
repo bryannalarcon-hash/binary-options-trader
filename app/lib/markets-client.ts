@@ -38,6 +38,7 @@ import {
 import type { Market, Order, OrderBookSnapshot, Outcome, Side, Ticker as TypesTicker } from "@meridian/types";
 import { env } from "./env";
 import { withTimeout } from "./loading-state";
+import { pickMarketForStrike } from "./market-select";
 import idl from "./meridian-idl.json";
 import { pickLatestSettledMarkets } from "./resolved-strikes";
 import { canonicalStrikeSet } from "./strike-grid";
@@ -322,7 +323,9 @@ export function useMarket(
   strike: number,
 ): { market: Market | null; loading: boolean; error: boolean } {
   const { markets, loading, error } = useAllMarkets();
-  const market = markets.find((m) => m.ticker === ticker && m.strike === strike) ?? null;
+  // Strikes recur across expiry days — pick the live/latest market, not the
+  // first account the RPC happens to return (often a long-settled one).
+  const market = pickMarketForStrike(markets, ticker, strike);
   return { market, loading, error };
 }
 
@@ -446,13 +449,21 @@ async function findOrderBookPda(
   try {
     const all = (await (program.account as any).market.all()) as Array<{
       publicKey: PublicKey;
-      account: { ticker: string; strike: BN };
+      account: { ticker: string; strike: BN; expiryTs: BN; settled: boolean };
     }>;
-    const hit = all.find(
-      (m) =>
-        m.account.ticker === ticker &&
-        Number(m.account.strike.toString()) === strike,
-    );
+    // Same selection rule as useMarket: prefer the live (non-settled) market,
+    // latest expiry on ties — strikes recur across days.
+    const hit = pickMarketForStrike(
+      all.map((m) => ({
+        ticker: m.account.ticker,
+        strike: Number(m.account.strike.toString()),
+        expiryTs: Number(m.account.expiryTs.toString()),
+        settled: !!m.account.settled,
+        raw: m,
+      })),
+      ticker,
+      strike,
+    )?.raw;
     if (!hit) return null;
     const orderbook = PublicKey.findProgramAddressSync(
       [ORDERBOOK_SEED, hit.publicKey.toBuffer()],

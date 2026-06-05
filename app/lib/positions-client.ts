@@ -47,6 +47,7 @@ import type { Market, Side } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
 import { shouldStopLoading, withTimeout } from "./loading-state";
+import { pickMarketForStrike } from "./market-select";
 import { useAllMarkets } from "./markets-client";
 import { buildPositions } from "./positions-build";
 import { chunk } from "./resolved-strikes";
@@ -791,7 +792,8 @@ export function useHoldingForMarket(
       setHolding({ yes: 0, no: 0 });
       return;
     }
-    const match = markets.find((m) => m.ticker === ticker && m.strike === strike);
+    // Same rule as useMarket: live/latest market for this strike, not first match.
+    const match = pickMarketForStrike(markets, ticker, strike);
     if (!match) {
       setHolding({ yes: 0, no: 0 });
       return;

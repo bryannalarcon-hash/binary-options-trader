@@ -325,3 +325,24 @@ $120, std ~ $11.18), non-monotonic-chain clipping (no negative density; mean/+-1
 stay inside the observed range), and unsorted-input sorting. Run:
 `cd tests && node_modules/.bin/mocha -t 60000 'unit/implied-distribution.test.ts'`.
 Full unit suite: **45 passing**.
+
+---
+
+## 8. Stale-market banner — (ticker, strike) selection regression
+
+**Bug (2026-06-05):** clicking a live strike (e.g. today's AAPL $320) showed a
+*settled* banner from an older expiry ("Resolved · No won … Settled May 27").
+Strikes recur across expiry days, and `useMarket`, `findOrderBookPda` (feeding
+`useOrderBook` + `useRecentTrades`), and `useHoldingForMarket` all resolved
+(ticker, strike) with a first-match `.find()` over every market account — so
+whichever account the RPC listed first (often a long-settled day) won.
+
+**Fix:** shared pure selector `pickMarketForStrike` in
+`app/lib/market-select.ts` — prefer the non-settled market, tie-break by latest
+`expiryTs` (the same rule the strike list already used). All four call sites now
+use it. Locked by `tests/unit/market-select.test.ts` (5 cases): live-over-settled
+at the same strike (the May-27 banner repro), awaiting-crank over settled,
+latest-expiry among live duplicates, latest-settled fallback when all are
+settled, exact ticker/strike matching + null when absent. Run:
+`cd tests && node_modules/.bin/mocha -t 60000 'unit/market-select.test.ts'`.
+Full unit suite: **53 passing**; `tsc --noEmit` clean.
