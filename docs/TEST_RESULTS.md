@@ -369,3 +369,24 @@ batches and passes blockTime for back-fill. Locked by
 `tests/unit/history-intent.test.ts` (8 cases). Run:
 `cd tests && node_modules/.bin/mocha -t 60000 'unit/history-intent.test.ts'`.
 Full unit suite: **61 passing**; `tsc --noEmit` clean.
+
+---
+
+## 10. Closed-position P&L invisible — realized-from-trading derivation
+
+**Gap (2026-06-05):** realized P&L existed only for positions held to 4 PM
+settlement. Closing by trading (buy 10 Yes @63¢, sell @57¢ → real −$0.60)
+made the position vanish from "active" without ever reaching "settled" — the
+loss appeared nowhere (summary, curve, or any page).
+
+**Fix:** pure `deriveClosedPositions(events)` in `app/lib/closed-positions.ts`
+— replays filled buy/sell rows oldest→newest with weighted-average basis
+(same convention as deriveCostBasis), realizing (exit−entry)·qty per close;
+sells beyond known basis are skipped (no invented P&L). Wired into
+`useUserPositions` (new `closed` array + trade-realized added to
+`summary.realizedPnlDollars`) and the portfolio page: new "Closed positions"
+section (per-position entry→exit + realized) and the results curve now plots
+settlements AND trade closes. Locked by
+`tests/unit/closed-positions.test.ts` (6 cases). Run:
+`cd tests && node_modules/.bin/mocha -t 60000 'unit/closed-positions.test.ts'`.
+Full unit suite: **67 passing**; `tsc --noEmit` clean.

@@ -20,6 +20,7 @@ import {
   fmt$,
 } from "@/components/caret";
 import { RedeemConfirmationModal } from "@/components/RedeemConfirmationModal";
+import { type ClosedPosition } from "@/lib/closed-positions";
 import { fmtUsdDollars } from "@/lib/format";
 import { useSpotPrice } from "@/lib/markets-client";
 import { useUserPositions, type Position } from "@/lib/positions-client";
@@ -44,7 +45,7 @@ export default function PortfolioPage() {
   const [connectOpen, setConnectOpen] = useState(false);
   const connected = mounted && wallet.connected;
   const usdc = useUsdcBalance();
-  const { active, settled, loading, error, refetch } = useUserPositions();
+  const { active, settled, closed, loading, error, refetch } = useUserPositions();
   const [redeemTarget, setRedeemTarget] = useState<Position[] | null>(null);
 
   // Hold a stable loading state until autoConnect resolves, so we don't flash
@@ -90,11 +91,9 @@ export default function PortfolioPage() {
         : s,
     0,
   );
-  const settledPnl = settled.reduce((s, p) => {
-    const winning = p.market.outcome === p.side;
-    const payout = winning ? p.quantity : 0;
-    return p.entryPrice != null ? s + payout - (p.entryPrice * p.quantity) / 100 : s;
-  }, 0);
+  // Realized P&L from positions exited by TRADING (sell vs weighted-avg entry),
+  // derived from real fills in closed-positions.ts.
+  const closedRealized = closed.reduce((s, c) => s + c.realizedDollars, 0);
   // "In the money" = the market currently prices YOUR side above 50¢ (favored
   // to win at settlement → would pay $1/token if it settled now). This is the
   // SAME basis as the per-row ITM/OTM pill, so a position is never labelled
@@ -130,7 +129,8 @@ export default function PortfolioPage() {
           </Label>
           <h2 style={{ marginTop: 6 }}>Your portfolio</h2>
           <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 6 }}>
-            {active.length} open · {settled.length} settled in the last 30 days
+            {active.length} open · {closed.length} closed · {settled.length} settled in the
+            last 30 days
           </div>
         </div>
         <button
@@ -288,40 +288,57 @@ export default function PortfolioPage() {
             </p>
           </Card>
         ) : (
-          <>
-            <div className="pf-cards">
-              {settled.map((p, i) => (
-                <SettledPositionCard
-                  key={`${p.market.address}-${p.side}-${i}-settled`}
-                  p={p}
-                  onRedeem={() => setRedeemTarget([p])}
-                />
-              ))}
-            </div>
-
-            {/* Realized P&L over the settled window — quiet, supportive, not a
-                trading terminal. Only shown when there's history to plot. */}
-            <Card style={{ marginTop: 16, padding: 20 }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  justifyContent: "space-between",
-                  marginBottom: 12,
-                  gap: 12,
-                  flexWrap: "wrap",
-                }}
-              >
-                <h4 style={{ margin: 0 }}>Your results over time</h4>
-                <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-                  Realized profit &amp; loss, last 30 days
-                </span>
-              </div>
-              <PnlCurve settled={settled} />
-            </Card>
-          </>
+          <div className="pf-cards">
+            {settled.map((p, i) => (
+              <SettledPositionCard
+                key={`${p.market.address}-${p.side}-${i}-settled`}
+                p={p}
+                onRedeem={() => setRedeemTarget([p])}
+              />
+            ))}
+          </div>
         )}
       </section>
+
+      {/* CLOSED BY TRADING — positions exited before settlement. Realized P&L
+          from real fills (weighted-average basis); renders only when present. */}
+      {closed.length > 0 && (
+        <section style={{ marginTop: 32 }}>
+          <SectionHead
+            title="Closed positions"
+            count={closed.length}
+            hint={`Realized ${closedRealized >= 0 ? "+" : "−"}${fmt$(Math.abs(closedRealized))} from trading out`}
+          />
+          <div className="pf-cards">
+            {closed.map((c, i) => (
+              <ClosedPositionCard key={`${c.ticker}-${c.strike}-${c.side}-${i}`} c={c} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* RESULTS CURVE — realized P&L from BOTH settlements and trade closes.
+          Quiet, supportive, not a trading terminal. */}
+      {(settled.length > 0 || closed.length > 0) && (
+        <Card style={{ marginTop: 24, padding: 20 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              marginBottom: 12,
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <h4 style={{ margin: 0 }}>Your results over time</h4>
+            <span style={{ fontSize: 12, color: "var(--text-3)" }}>
+              Realized profit &amp; loss, last 30 days
+            </span>
+          </div>
+          <PnlCurve settled={settled} closed={closed} />
+        </Card>
+      )}
 
       {redeemTarget && (
         <RedeemConfirmationModal
@@ -674,6 +691,44 @@ function Field({
 }
 
 // ---------------------------------------------------------------------------
+// Closed position card — exited by trading before settlement. Entry → exit
+// averages with the realized result; sign + color pair so meaning isn't
+// color-only.
+// ---------------------------------------------------------------------------
+function ClosedPositionCard({ c }: { c: ClosedPosition }) {
+  const win = c.realizedDollars >= 0;
+  const dir = c.side === "yes" ? "above" : "below";
+  return (
+    <Card
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: "14px 18px",
+        flexWrap: "wrap",
+      }}
+    >
+      <div>
+        <div style={{ fontWeight: 600, fontSize: 14 }}>
+          {c.side === "yes" ? "Yes" : "No"} · {TICKER_NAME[c.ticker] ?? c.ticker} {dir} $
+          {(c.strike / 100).toFixed(2)}
+        </div>
+        <div style={{ fontSize: 12.5, color: "var(--text-3)", marginTop: 4 }}>
+          {c.quantity} share{c.quantity === 1 ? "" : "s"} · in {c.avgEntryCents}¢ → out{" "}
+          {c.avgExitCents}¢
+        </div>
+      </div>
+      <span className={win ? "up" : "dn"} style={{ fontWeight: 600, fontSize: 14 }}>
+        <span className="num">
+          {win ? "+" : "−"}${Math.abs(c.realizedDollars).toFixed(2)}
+        </span>
+      </span>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Settled position card — winner (reassuring redeem) or honest "didn't win".
 // ---------------------------------------------------------------------------
 function SettledPositionCard({ p, onRedeem }: { p: Position; onRedeem: () => void }) {
@@ -837,9 +892,10 @@ function SpotStrikeMini({ spot, strike }: { spot: number; strike: number }) {
 
 // ---------------------------------------------------------------------------
 // Realized P&L curve — REAL cumulative realized P&L from settled positions
-// (known basis), ordered by settlement time. No synthesis: <2 points → empty.
+// (known basis) AND positions closed by trading, ordered by event time.
+// No synthesis: <2 points → empty.
 // ---------------------------------------------------------------------------
-function PnlCurve({ settled }: { settled: Position[] }) {
+function PnlCurve({ settled, closed }: { settled: Position[]; closed: ClosedPosition[] }) {
   const data = useMemo(() => {
     const points = settled
       .filter((p) => p.entryPrice != null && p.market.settlementTs != null)
@@ -848,13 +904,16 @@ function PnlCurve({ settled }: { settled: Position[] }) {
         const pnl = payout - (p.entryPrice! * p.quantity) / 100;
         return { ts: p.market.settlementTs!, pnl };
       })
+      .concat(
+        closed.map((c) => ({ ts: Math.floor(c.lastTs / 1000), pnl: c.realizedDollars })),
+      )
       .sort((a, b) => a.ts - b.ts);
     let cum = 0;
     return points.map((pt) => {
       cum += pt.pnl;
       return cum;
     });
-  }, [settled]);
+  }, [settled, closed]);
 
   if (data.length < 2) {
     return (
@@ -866,8 +925,8 @@ function PnlCurve({ settled }: { settled: Position[] }) {
           fontSize: 12.5,
         }}
       >
-        Not enough settled history to chart yet — this fills in as more of your
-        positions settle.
+        Not enough history to chart yet — this fills in as you close positions or
+        hold them through settlement.
       </div>
     );
   }

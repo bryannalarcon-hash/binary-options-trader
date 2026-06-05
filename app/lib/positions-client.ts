@@ -49,6 +49,7 @@ import type { Market, Side } from "@meridian/types";
 import { env } from "./env";
 import idl from "./meridian-idl.json";
 import { shouldStopLoading, withTimeout } from "./loading-state";
+import { deriveClosedPositions, type ClosedPosition } from "./closed-positions";
 import { buildTxHistoryRows } from "./history-intent";
 import { pickMarketForStrike } from "./market-select";
 import { useAllMarkets } from "./markets-client";
@@ -186,6 +187,7 @@ export interface PortfolioSummary {
   totalValueDollars: number;
   /** Unrealized P&L over positions where cost basis is known. */
   unrealizedPnlDollars: number;
+  /** Settlement payouts + trade-closed P&L (both vs known basis only). */
   realizedPnlDollars: number;
   openCount: number;
 }
@@ -309,6 +311,8 @@ function deriveCostBasis(
 export function useUserPositions(): {
   active: Position[];
   settled: Position[];
+  /** Positions closed by trading out (realized P&L from fills). */
+  closed: ClosedPosition[];
   summary: PortfolioSummary;
   loading: boolean;
   error: boolean;
@@ -455,15 +459,23 @@ export function useUserPositions(): {
     };
   }, [connection, publicKey, mounted, markets, marketsLoading, marketsError, events, reloadKey, timedOut]);
 
-  const summary = useMemo(() => aggregate(active, settled), [active, settled]);
+  const closedDerived = useMemo(() => deriveClosedPositions(events), [events]);
+  const summary = useMemo(
+    () => aggregate(active, settled, closedDerived.realizedDollars),
+    [active, settled, closedDerived],
+  );
   const refetch = () => setReloadKey((k) => k + 1);
-  return { active, settled, summary, loading, error, refetch };
+  return { active, settled, closed: closedDerived.closed, summary, loading, error, refetch };
 }
 
-function aggregate(active: Position[], settled: Position[]): PortfolioSummary {
+function aggregate(
+  active: Position[],
+  settled: Position[],
+  tradeRealizedDollars = 0,
+): PortfolioSummary {
   let total = 0;
   let unreal = 0;
-  let real = 0;
+  let real = tradeRealizedDollars;
   for (const p of active) {
     if (p.currentPrice != null) {
       total += (p.quantity * p.currentPrice) / 100;
