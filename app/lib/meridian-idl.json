@@ -1230,7 +1230,14 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [99, 111, 110, 102, 105, 103]
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
               }
             ]
           }
@@ -1244,7 +1251,16 @@
     },
     {
       "name": "set_risk_params",
-      "discriminator": [203, 154, 198, 239, 21, 242, 173, 235],
+      "discriminator": [
+        203,
+        154,
+        198,
+        239,
+        21,
+        242,
+        173,
+        235
+      ],
       "accounts": [
         {
           "name": "config",
@@ -1253,7 +1269,14 @@
             "seeds": [
               {
                 "kind": "const",
-                "value": [99, 111, 110, 102, 105, 103]
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
               }
             ]
           }
@@ -1478,6 +1501,78 @@
           "type": "string"
         }
       ]
+    },
+    {
+      "name": "close_settled_book",
+      "docs": [
+        "Rent reclamation: close a SETTLED market's (empty) order book and",
+        "return its lamports to the admin. See close_settled_book.rs."
+      ],
+      "discriminator": [
+        52,
+        14,
+        129,
+        0,
+        59,
+        17,
+        246,
+        102
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market"
+        },
+        {
+          "name": "orderbook",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  111,
+                  114,
+                  100,
+                  101,
+                  114,
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
@@ -1716,6 +1811,19 @@
         142,
         16
       ]
+    },
+    {
+      "name": "BookClosed",
+      "discriminator": [
+        82,
+        77,
+        120,
+        113,
+        7,
+        80,
+        29,
+        41
+      ]
     }
   ],
   "errors": [
@@ -1853,6 +1961,36 @@
       "code": 6026,
       "name": "InvalidFeeDestination",
       "msg": "Fee destination USDC ATA does not match config.fee_destination"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidRiskParam",
+      "msg": "Invalid risk parameter (staleness must be > 0; confidence bps in 1..=10000)"
+    },
+    {
+      "code": 6028,
+      "name": "BothSidesHeld",
+      "msg": "Cannot hold both YES and NO on the same strike at once"
+    },
+    {
+      "code": 6029,
+      "name": "SingleSidedGuardMissing",
+      "msg": "Buying YES while holding NO requires a trailing assert_single_sided in the same transaction"
+    },
+    {
+      "code": 6030,
+      "name": "InvalidConfigLayout",
+      "msg": "Config account is not in a migratable layout (wrong owner or too small)"
+    },
+    {
+      "code": 6031,
+      "name": "MarketNotSettled",
+      "msg": "Market must be settled before its book can be closed"
+    },
+    {
+      "code": 6032,
+      "name": "OrderBookNotEmpty",
+      "msg": "Order book still has resting orders \u2014 cancel them before closing"
     }
   ],
   "types": [
@@ -2495,6 +2633,22 @@
           },
           {
             "name": "oracle",
+            "type": "pubkey"
+          },
+          {
+            "name": "lamports_reclaimed",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BookClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
             "type": "pubkey"
           },
           {

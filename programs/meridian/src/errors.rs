@@ -98,4 +98,10 @@ pub enum MeridianError {
 
     #[msg("Config account is not in a migratable layout (wrong owner or too small)")]
     InvalidConfigLayout,
+
+    #[msg("Market must be settled before its book can be closed")]
+    MarketNotSettled,
+
+    #[msg("Order book still has resting orders — cancel them before closing")]
+    OrderBookNotEmpty,
 }

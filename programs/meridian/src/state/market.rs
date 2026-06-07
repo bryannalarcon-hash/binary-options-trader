@@ -3,6 +3,12 @@ use anchor_lang::prelude::*;
 /// Maximum ticker length — covers MAG7 plus headroom for future symbols.
 pub const MAX_TICKER_LEN: usize = 8;
 
+/// Ticker suffix marking a TEST market (e.g. "AAPL-T"). Test markets exist so
+/// the platform stays exercisable outside trading hours: the admin may settle
+/// them at ANY time via `admin_settle_override` (the 1-hour-post-expiry gate
+/// is skipped), while real markets keep the full gate.
+pub const TEST_TICKER_SUFFIX: &str = "-T";
+
 /// Binary settlement outcome.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq, InitSpace)]
 pub enum Outcome {
@@ -67,4 +73,10 @@ pub struct Market {
 
 impl Market {
     pub const SEED_PREFIX: &'static [u8] = b"market";
+
+    /// True when this market's ticker carries the TEST suffix ("-T") — an
+    /// always-testable fixture the admin may settle at any time.
+    pub fn is_test(&self) -> bool {
+        self.ticker.ends_with(TEST_TICKER_SUFFIX)
+    }
 }

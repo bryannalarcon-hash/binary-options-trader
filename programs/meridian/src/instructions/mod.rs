@@ -22,6 +22,7 @@ pub mod pause;
 pub mod set_risk_params;
 pub mod update_oracle;
 pub mod close_oracle;
+pub mod close_settled_book;
 
 pub use initialize_config::*;
 pub use create_strike_market::*;
@@ -40,3 +41,4 @@ pub use pause::*;
 pub use set_risk_params::*;
 pub use update_oracle::*;
 pub use close_oracle::*;
+pub use close_settled_book::*;

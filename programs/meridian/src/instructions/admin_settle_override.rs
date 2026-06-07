@@ -33,14 +33,20 @@ pub fn handler(ctx: Context<AdminSettleOverride>, manual_price: u64) -> Result<(
 
     require!(!market.settled, MeridianError::AlreadySettled);
 
-    let deadline = market
-        .expiry_ts
-        .checked_add(ADMIN_OVERRIDE_DELAY_SECS)
-        .ok_or(MeridianError::MathOverflow)?;
-    require!(
-        clock.unix_timestamp >= deadline,
-        MeridianError::TimeGateNotElapsed
-    );
+    // TEST markets (ticker "*-T") are admin-settleable at ANY time — they
+    // exist to keep the platform exercisable outside trading hours. Real
+    // markets keep the mandatory 1-hour-post-expiry gate so the
+    // permissionless settle crank always gets first shot.
+    if !market.is_test() {
+        let deadline = market
+            .expiry_ts
+            .checked_add(ADMIN_OVERRIDE_DELAY_SECS)
+            .ok_or(MeridianError::MathOverflow)?;
+        require!(
+            clock.unix_timestamp >= deadline,
+            MeridianError::TimeGateNotElapsed
+        );
+    }
 
     let outcome = if manual_price >= market.strike {
         Outcome::Yes

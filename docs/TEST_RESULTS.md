@@ -390,3 +390,37 @@ settlements AND trade closes. Locked by
 `tests/unit/closed-positions.test.ts` (6 cases). Run:
 `cd tests && node_modules/.bin/mocha -t 60000 'unit/closed-positions.test.ts'`.
 Full unit suite: **67 passing**; `tsc --noEmit` clean.
+
+---
+
+## 11. Rent reclamation + always-testable TEST market (program upgrade)
+
+**Why (2026-06-07):** market creation burns ~3 SOL/day of rent and the admin
+wallet silently drained to 0.0057 SOL (the top-up cron lives on a sometimes-off
+WSL box) — Monday's 8 AM creation would have failed. Separately, the platform
+was untestable outside market hours (all markets settled on weekends).
+
+**Program changes (deployed to devnet, slot 467852291):**
+- `close_settled_book` — admin-only; closes a SETTLED market's order book when
+  every bids/asks slot is empty (a resting order's escrow needs the on-book
+  record, so non-empty books are rejected `OrderBookNotEmpty`); rent → admin.
+- `admin_settle_override` now skips its 1-hour-post-expiry gate ONLY for TEST
+  markets (ticker suffix "-T", `Market::is_test()`); real markets keep the gate.
+- IDL hand-patched (anchor 0.30 idl-build broken vs proc-macro2 ≥1.0.95);
+  discriminator derivation verified bit-exact against `cancel_order`'s.
+
+**On-chain E2E (devnet, scripts/_test-market-setup.ts):**
+- NEG `close_settled_book` on a live market → `MarketNotSettled` ✓
+- NEG `admin_settle_override` pre-gate on a REAL market → `TimeGateNotElapsed` ✓
+- POS pre-expiry force-settle of an "AAPL-T" market → settled, outcome Yes ✓
+- POS `close_settled_book` on it → ~0.0137 SOL reclaimed ✓
+
+**Backfill (scripts/_reclaim-books.ts):** 202/202 settled books closed, 311
+stale MM orders cancelled, 0 third-party orders, 0 failures, **+2.76 SOL**.
+
+**Automation:** daily reclaim job (AUTOMATION_RECLAIM_CRON, default 4:30 PM ET)
++ TEST_TICKER_MIRRORS oracle mirroring (AAPL-T tracks AAPL each pass).
+**App:** "-T" tickers render with a TEST badge ("Apple (Test)"), routes accept
+them, Pyth links resolve to the base ticker. Unit: tests/unit/test-tickers.test.ts
+(10 cases). Full unit suite: **77 passing**; app+automation `tsc --noEmit` clean.
+**Standing fixture:** AAPL-T ±3/6/9% chain (6 markets, seeded books, exp 2030-06-03).

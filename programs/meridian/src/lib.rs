@@ -148,4 +148,10 @@ pub mod meridian {
     pub fn close_oracle(ctx: Context<CloseOracle>, ticker: String) -> Result<()> {
         instructions::close_oracle::handler(ctx, ticker)
     }
+
+    /// Rent reclamation: close a SETTLED market's (empty) order book and
+    /// return its lamports to the admin. See close_settled_book.rs.
+    pub fn close_settled_book(ctx: Context<CloseSettledBook>) -> Result<()> {
+        instructions::close_settled_book::handler(ctx)
+    }
 }
