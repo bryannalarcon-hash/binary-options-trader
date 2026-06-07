@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 
-import { MAG7_TICKERS, type Ticker } from "@/lib/tickers";
+import { MAG7_TICKERS, isTestTicker, type Ticker } from "@/lib/tickers";
 import { TradePageClient } from "./TradePageClient";
 
 interface PageProps {
@@ -11,11 +11,12 @@ interface PageProps {
  * Trade page (`/trade/[ticker]/[strike]`).
  *
  * Server validates the URL params, then renders the interactive client.
+ * Accepts the MAG7 tickers plus "-T" TEST fixtures (e.g. "AAPL-T").
  */
 export default async function TradePage({ params }: PageProps) {
   const { ticker, strike } = await params;
   const upper = ticker.toUpperCase() as Ticker;
-  if (!(MAG7_TICKERS as readonly string[]).includes(upper)) {
+  if (!(MAG7_TICKERS as readonly string[]).includes(upper) && !isTestTicker(upper)) {
     redirect("/markets");
   }
   const strikeNum = Number(strike);

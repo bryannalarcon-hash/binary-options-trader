@@ -1,5 +1,9 @@
 "use client";
 
+// Markets browse page — per-ticker groups (Browse) or compact rows over REAL
+// on-chain markets. Lists the MAG7 plus any distinct "-T" TEST fixtures found
+// on-chain (sorted last, labeled with a .test-badge pill so they read as fake).
+
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -21,7 +25,13 @@ import {
 } from "@/lib/markets-client";
 import { pickRedirectStrike } from "@/lib/trade-redirect";
 import { useMounted } from "@/lib/use-mounted";
-import { MAG7_TICKERS, TICKER_NAME, type Ticker } from "@/lib/tickers";
+import {
+  MAG7_TICKERS,
+  TICKER_NAME,
+  displayTickerName,
+  isTestTicker,
+  type Ticker,
+} from "@/lib/tickers";
 
 /** Closest strike to a real spot (cents); null when either is unavailable. */
 function atmFromRows(rows: StrikeRow[], spotCents: number | null): number | null {
@@ -58,13 +68,27 @@ export default function MarketsPage() {
   const { markets } = useAllMarkets();
 
   // Static per-stock metadata (no synthesized prices). Spot + strikes are read
-  // live inside each group via real hooks.
+  // live inside each group via real hooks. The visible list is the MAG7 plus
+  // any DISTINCT "-T" TEST fixtures observed on-chain (e.g. "AAPL-T"), which
+  // sort last and carry an explicit TEST badge.
   const stocks = useMemo<StockRow[]>(() => {
-    return MAG7_TICKERS.map((t) => ({
+    const real: StockRow[] = MAG7_TICKERS.map((t) => ({
       sym: t,
       name: TICKER_NAME[t],
+      isTest: false,
     }));
-  }, []);
+    const testSyms = [
+      ...new Set(markets.map((m) => m.ticker as string).filter(isTestTicker)),
+    ].sort();
+    const test: StockRow[] = testSyms.map((t) => ({
+      // Route/hook plumbing types tickers as the MAG7 union; test tickers are
+      // real on-chain strings outside it, so cast at this one seam.
+      sym: t as Ticker,
+      name: displayTickerName(t),
+      isTest: true,
+    }));
+    return [...real, ...test];
+  }, [markets]);
 
   const filtered = stocks.filter((s) => {
     if (
@@ -76,7 +100,10 @@ export default function MarketsPage() {
     return true;
   });
 
-  const sorted = [...filtered].sort((a, b) => a.sym.localeCompare(b.sym));
+  // Real tickers alphabetical first; TEST fixtures always last.
+  const sorted = [...filtered].sort((a, b) =>
+    a.isTest !== b.isTest ? (a.isTest ? 1 : -1) : a.sym.localeCompare(b.sym),
+  );
 
   const activeStrikes = markets.filter((m) => !m.settled).length;
   const todayLabel = mounted
@@ -219,8 +246,8 @@ export default function MarketsPage() {
             textAlign: "center",
           }}
         >
-          {activeStrikes} price{activeStrikes === 1 ? "" : "s"} open across 7 stocks ·
-          all settle at 4:00 PM ET
+          {activeStrikes} price{activeStrikes === 1 ? "" : "s"} open across{" "}
+          {stocks.length} stocks · all settle at 4:00 PM ET
         </p>
       )}
     </div>
@@ -233,6 +260,8 @@ export default function MarketsPage() {
 interface StockRow {
   sym: Ticker;
   name: string;
+  /** True for a "-T" TEST fixture — rendered with an explicit TEST badge. */
+  isTest: boolean;
 }
 
 function useStockData(sym: Ticker) {
@@ -315,6 +344,7 @@ function StockGroup({ stock }: { stock: StockRow }) {
           <span style={{ fontSize: 18, fontWeight: 600, letterSpacing: "-0.01em" }}>
             {stock.sym}
           </span>
+          {stock.isTest && <span className="test-badge">Test market</span>}
           <span
             style={{
               fontSize: 13.5,
@@ -617,6 +647,7 @@ function CompactRow({ stock }: { stock: StockRow }) {
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 }}>
         <span style={{ fontSize: 16, fontWeight: 600 }}>{stock.sym}</span>
+        {stock.isTest && <span className="test-badge">Test market</span>}
         <span
           style={{
             fontSize: 13,

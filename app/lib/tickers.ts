@@ -1,3 +1,7 @@
+// tickers.ts — static MAG7 ticker metadata (names, Pyth feed ids) plus the
+// TEST-market ("-T" suffix, e.g. "AAPL-T") helpers: detection, base-ticker
+// stripping, and display names that clearly label fixtures as "(Test)".
+
 import type { Ticker } from "@meridian/types";
 
 /**
@@ -40,5 +44,38 @@ export const PYTH_FEED_ID: Record<Ticker, string> = {
   META: "0x78a3e3b8e676a8f73c439f5d749737034b139bbbe899ba5775216fba596607fe",
   TSLA: "0x16dad506d7db8da01c87581c87ca897a012a153557d4d578c3b9c9e1bc0632f1",
 };
+
+// ---------------------------------------------------------------------------
+// TEST markets — a ticker ending in "-T" (e.g. "AAPL-T") is a permanently-
+// tradeable FIXTURE mirroring the real stock. It must always be labeled as
+// fake in the UI (see `.test-badge` + `displayTickerName`).
+// ---------------------------------------------------------------------------
+
+/** On-chain ticker suffix that marks a TEST market fixture. */
+export const TEST_TICKER_SUFFIX = "-T";
+
+/** True when an on-chain ticker names a TEST market (e.g. "AAPL-T"). */
+export function isTestTicker(t: string): boolean {
+  return t.length > TEST_TICKER_SUFFIX.length && t.endsWith(TEST_TICKER_SUFFIX);
+}
+
+/** Strip the TEST suffix ("AAPL-T" → "AAPL"); no-op for real tickers. */
+export function baseTicker(t: string): string {
+  return isTestTicker(t) ? t.slice(0, -TEST_TICKER_SUFFIX.length) : t;
+}
+
+/**
+ * Human display name for any on-chain ticker string.
+ *   - Test ticker:  mirrored company name + " (Test)"  ("AAPL-T" → "Apple (Test)")
+ *   - Real ticker:  TICKER_NAME entry, or the raw ticker when unknown.
+ */
+export function displayTickerName(t: string): string {
+  const names = TICKER_NAME as Record<string, string>;
+  if (isTestTicker(t)) {
+    const base = baseTicker(t);
+    return `${names[base] ?? base} (Test)`;
+  }
+  return names[t] ?? t;
+}
 
 export type { Ticker };

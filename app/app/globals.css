@@ -1,3 +1,7 @@
+/* globals.css — caret design tokens (OKLCH, dark + light themes) and the app's
+   global kit: type utilities, cards / pills / badges / buttons, chips, tables,
+   layout helpers, and the decorative aurora. Consumed app-wide via layout. */
+
 @import url('https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@300;400;500;600&display=swap');
 
 @tailwind base;
@@ -51,6 +55,8 @@
   --down-ink:      oklch(0.20 0.05 25);
 
   --warn:          oklch(0.84 0.14 78);
+  --warn-soft:     oklch(0.84 0.14 78 / 0.14);
+  --warn-line:     oklch(0.84 0.14 78 / 0.36);
 
   /* Radii */
   --r-sm: 6px;
@@ -120,6 +126,8 @@
   --down-ink:      oklch(0.99 0 0);
 
   --warn:          oklch(0.62 0.13 72);
+  --warn-soft:     oklch(0.62 0.13 72 / 0.10);
+  --warn-line:     oklch(0.62 0.13 72 / 0.32);
 
   /* Aurora on the light canvas — present and clearly visible, still calm */
   --aura-1:        oklch(0.66 0.17 252 / 0.46);
@@ -266,6 +274,26 @@ h4 { font-size: 15px; line-height: 1.3;  letter-spacing: -0.005em; font-weight: 
 .pill.dn { color: var(--down); background: var(--down-soft); border-color: var(--down-line); }
 .pill.accent { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
 .pill .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+
+/* TEST-market badge — marks "-T" fixture markets (fake, permanently
+   tradeable) so they're never mistaken for real listings. Amber/warning
+   pill on the theme-tuned --warn ramp; legible on dark AND light. */
+.test-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+}
 
 .seg {
   display: inline-flex;

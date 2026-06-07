@@ -2,7 +2,8 @@
  * Markets data client — REAL on-chain reads, no mock fallbacks.
  *
  * Every hook reads the deployed program at `env.programId`:
- *   - `useAllMarkets`  → `program.account.market.all()` (decoded MAG7 markets).
+ *   - `useAllMarkets`  → `program.account.market.all()` (decoded MAG7 markets
+ *                        plus "-T" TEST fixtures, e.g. "AAPL-T").
  *   - `useMarket`      → one market by (ticker, strike) from `useAllMarkets`.
  *   - `useSpotPrice`   → the per-ticker `OracleAccount` PDA (seeds
  *                        ["oracle", ticker]); spot USD = price / 100 (expo -2,
@@ -42,7 +43,7 @@ import { pickMarketForStrike } from "./market-select";
 import idl from "./meridian-idl.json";
 import { pickLatestSettledMarkets } from "./resolved-strikes";
 import { canonicalStrikeSet } from "./strike-grid";
-import { MAG7_TICKERS, type Ticker } from "./tickers";
+import { MAG7_TICKERS, isTestTicker, type Ticker } from "./tickers";
 
 /**
  * Bounded timeout (ms) for the `market.all()` getProgramAccounts read. Under
@@ -153,7 +154,8 @@ function decodeOnChainMarket(entry: {
     settlementPrice?: BN | null;
     totalPairsMinted: BN;
   };
-  if (!a.ticker || !MAG7_SET.has(a.ticker)) return null;
+  // MAG7 plus "-T" TEST fixtures (e.g. "AAPL-T") — anything else is noise.
+  if (!a.ticker || !(MAG7_SET.has(a.ticker) || isTestTicker(a.ticker))) return null;
   let outcome: Outcome | null = null;
   if (a.outcome) {
     if ("yes" in a.outcome) outcome = "yes";

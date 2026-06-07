@@ -9,7 +9,7 @@ import {
   useStrikeList,
 } from "@/lib/markets-client";
 import { pickRedirectStrike } from "@/lib/trade-redirect";
-import { MAG7_TICKERS, type Ticker } from "@/lib/tickers";
+import { MAG7_TICKERS, isTestTicker, type Ticker } from "@/lib/tickers";
 
 /**
  * `/trade/[ticker]` — client redirect to the at-the-money strike for that
@@ -24,6 +24,8 @@ import { MAG7_TICKERS, type Ticker } from "@/lib/tickers";
  *
  * Client-side because ATM selection needs live on-chain reads (a server
  * redirect can't read the chain synchronously, and we never hardcode a strike).
+ *
+ * Routable tickers are the MAG7 plus "-T" TEST fixtures (e.g. "AAPL-T").
  */
 export default function TradeTickerPage({
   params,
@@ -32,7 +34,9 @@ export default function TradeTickerPage({
 }) {
   const { ticker } = use(params);
   const upper = ticker.toUpperCase() as Ticker;
-  const known = (MAG7_TICKERS as readonly string[]).includes(upper);
+  // MAG7 plus "-T" TEST fixtures (e.g. "AAPL-T") are routable tickers.
+  const known =
+    (MAG7_TICKERS as readonly string[]).includes(upper) || isTestTicker(upper);
   const router = useRouter();
   const lookupTicker = known ? upper : "AAPL";
   const { rows: activeRows, loading: activeLoading, error: activeError } =

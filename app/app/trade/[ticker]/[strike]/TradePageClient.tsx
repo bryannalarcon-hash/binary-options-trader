@@ -1,5 +1,10 @@
 "use client";
 
+// TradePageClient — the interactive /trade/[ticker]/[strike] surface: bet
+// headline, order ticket, order book / charts / tape, and the contract rail,
+// all over REAL on-chain reads. "-T" TEST fixtures (e.g. "AAPL-T") trade like
+// any market but are labeled with a .test-badge pill + "(Test)" display name.
+
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -41,7 +46,13 @@ import { notify } from "@/lib/notify";
 import { useHoldingForMarket } from "@/lib/positions-client";
 import { OpenOrdersForMarket } from "@/lib/open-orders";
 import { bumpTradeCount, useSettings } from "@/lib/settings";
-import { TICKER_NAME, PYTH_FEED_ID, type Ticker } from "@/lib/tickers";
+import {
+  PYTH_FEED_ID,
+  baseTicker,
+  displayTickerName,
+  isTestTicker,
+  type Ticker,
+} from "@/lib/tickers";
 import { useUsdcBalance } from "@/lib/usdc";
 import { useMounted } from "@/lib/use-mounted";
 import { MarketStatusChip } from "@/components/MarketStatusChip";
@@ -278,9 +289,17 @@ function BetHeadline({
         }}
       >
         Will {ticker} close at or above ${strikeDollars.toFixed(2)} today?
+        {isTestTicker(ticker) && (
+          <span
+            className="test-badge"
+            style={{ marginLeft: 10, verticalAlign: "middle" }}
+          >
+            Test market
+          </span>
+        )}
       </div>
       <div style={{ fontSize: 13, color: "var(--text-3)", marginTop: 8 }}>
-        {TICKER_NAME[ticker]} · settles today 4:00 PM ET
+        {displayTickerName(ticker)} · settles today 4:00 PM ET
         {settlesIn !== "—" && (
           <>
             {" · "}
@@ -452,11 +471,12 @@ function AdvancedSection({
                   </div>
                 </div>
                 <a
-                  href={`https://pyth.network/price-feeds/equity-us-${ticker.toLowerCase()}-usd`}
+                  // "-T" fixtures mirror the real stock — link its real feed.
+                  href={`https://pyth.network/price-feeds/equity-us-${baseTicker(ticker).toLowerCase()}-usd`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  title={PYTH_FEED_ID[ticker]}
-                  aria-label={`View ${ticker}/USD Pyth price feed (opens in new tab)`}
+                  title={(PYTH_FEED_ID as Record<string, string>)[baseTicker(ticker)]}
+                  aria-label={`View ${baseTicker(ticker)}/USD Pyth price feed (opens in new tab)`}
                   style={{ color: "var(--text-3)", display: "inline-flex" }}
                 >
                   <IconExt size={14} />
@@ -676,11 +696,16 @@ function TradeHeader({
             }}
           >
             <span>{ticker}</span>
+            {isTestTicker(ticker) && (
+              <span className="test-badge" style={{ alignSelf: "center" }}>
+                Test market
+              </span>
+            )}
             <IconCaret size={18} style={{ color: "var(--accent)" }} />
             <span className="num">${strikeDollars.toFixed(2)}</span>
           </div>
           <div style={{ fontSize: 12, color: "var(--text-3)", marginTop: 6 }}>
-            {TICKER_NAME[ticker]} · spot{" "}
+            {displayTickerName(ticker)} · spot{" "}
             <span className="num" style={{ color: "var(--text-2)" }}>
               {spotLabel}
             </span>
@@ -1931,7 +1956,7 @@ function TradePanel({
           <div>
             <h4>Trade {ticker}</h4>
             <span style={{ fontSize: 12, color: "var(--text-3)" }}>
-              Strike ${strikeDollars.toFixed(2)} · {TICKER_NAME[ticker]}
+              Strike ${strikeDollars.toFixed(2)} · {displayTickerName(ticker)}
             </span>
           </div>
           <Pill>SOL Devnet</Pill>
