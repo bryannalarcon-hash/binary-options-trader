@@ -1,3 +1,7 @@
+// env.ts — typed environment configuration for the automation service.
+// Loads .env.local then .env, normalizes via req/num/bool/boolAny/pairs
+// helpers, and exports the single `env` object every module reads from.
+
 import * as dotenv from "dotenv";
 import * as path from "path";
 
@@ -36,6 +40,21 @@ function boolAny(names: string[], fallback = false): boolean {
   return fallback;
 }
 
+/**
+ * Parse a comma-separated "KEY:VALUE" list (e.g. "AAPL-T:AAPL,MSFT-T:MSFT")
+ * into a Record. Blank or malformed entries are skipped. Empty default.
+ */
+function pairs(name: string): Record<string, string> {
+  const v = process.env[name];
+  if (!v) return {};
+  const out: Record<string, string> = {};
+  for (const entry of v.split(",")) {
+    const [key, value] = entry.split(":").map((s) => s.trim());
+    if (key && value) out[key] = value;
+  }
+  return out;
+}
+
 function num(name: string, fallback: number): number {
   const v = process.env[name];
   if (v === undefined || v === "") return fallback;
@@ -69,9 +88,11 @@ export const env = {
   // -------- Cron schedules --------
   // Expressions are interpreted in `cronTimezone` (default America/New_York),
   // so they read as wall-clock ET regardless of the host TZ or DST. Morning
-  // job at 8:00 AM ET (before 9:30 open), settle at 4:05 PM ET (just after close).
+  // job at 8:00 AM ET (before 9:30 open), settle at 4:05 PM ET (just after
+  // close), reclaim at 4:30 PM ET (after settle, so books are closeable).
   morningCron: process.env.AUTOMATION_MORNING_CRON || "0 8 * * 1-5",
   settleCron: process.env.AUTOMATION_SETTLE_CRON || "5 16 * * 1-5",
+  reclaimCron: process.env.AUTOMATION_RECLAIM_CRON || "30 16 * * 1-5",
   // IANA timezone the morning/settle crons are evaluated in. Pinning this to
   // America/New_York means we never have to hand-convert to UTC or chase DST.
   cronTimezone: process.env.AUTOMATION_CRON_TIMEZONE || "America/New_York",
@@ -94,6 +115,9 @@ export const env = {
     META: process.env.PYTH_FEED_META || "",
     TSLA: process.env.PYTH_FEED_TSLA || "",
   } as Record<string, string>,
+  // Mirror a real ticker's Hermes price onto a TEST ticker's oracle PDA each
+  // oracle pass. Format: "AAPL-T:AAPL,MSFT-T:MSFT" (test:source pairs).
+  testTickerMirrors: pairs("TEST_TICKER_MIRRORS"),
 
   // -------- Dev toggles --------
   // Pull live prices from Pyth Hermes and write them on-chain via update_oracle.

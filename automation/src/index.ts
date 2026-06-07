@@ -3,6 +3,7 @@ import * as cron from "node-cron";
 import { env } from "./env";
 import { markEnd, markStart, startHealthServer } from "./health";
 import { runMorningJob } from "./jobs/morning";
+import { runReclaimJob } from "./jobs/reclaim";
 import { runSettleJob } from "./jobs/settle";
 import { runOracleUpdaterOnce } from "./jobs/update-oracle";
 import { ctx, logger } from "./logger";
@@ -13,6 +14,7 @@ import { ctx, logger } from "./logger";
  * Registers cron jobs for:
  *  - Morning market creation (AUTOMATION_MORNING_CRON, default 8 AM ET weekdays)
  *  - Settlement (AUTOMATION_SETTLE_CRON, default 4:05 PM ET weekdays)
+ *  - Rent reclaim — close settled order books (AUTOMATION_RECLAIM_CRON, default 4:30 PM ET weekdays)
  *  - Oracle updates from Pyth Hermes (every ORACLE_UPDATE_INTERVAL_SECONDS while USE_HERMES_ORACLE=true)
  *
  * Also serves a JSON /health endpoint on AUTOMATION_HEALTH_PORT (default 3001).
@@ -47,6 +49,7 @@ async function main(): Promise<void> {
       skipCalendarCheck: env.skipCalendarCheck,
       morningCron: env.morningCron,
       settleCron: env.settleCron,
+      reclaimCron: env.reclaimCron,
       healthPort: env.healthPort,
     },
     "Meridian automation service starting",
@@ -74,6 +77,16 @@ async function main(): Promise<void> {
     { timezone: env.cronTimezone },
   );
   log.info({ cron: env.settleCron, tz: env.cronTimezone }, "settle job scheduled");
+
+  // -------- Reclaim job (close settled order books, rent → admin) --------
+  cron.schedule(
+    env.reclaimCron,
+    () => {
+      void runJob("reclaim", runReclaimJob);
+    },
+    { timezone: env.cronTimezone },
+  );
+  log.info({ cron: env.reclaimCron, tz: env.cronTimezone }, "reclaim job scheduled");
 
   // -------- Hermes oracle updater (pulls live Pyth prices on-chain) --------
   if (env.useHermesOracle) {

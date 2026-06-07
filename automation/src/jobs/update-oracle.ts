@@ -1,3 +1,8 @@
+// update-oracle.ts — Hermes→on-chain oracle updater. Each pass fetches the
+// latest Pyth prices for the MAG7 set and posts `update_oracle` per ticker,
+// then mirrors source prices onto test tickers (TEST_TICKER_MIRRORS, e.g.
+// "AAPL-T:AAPL") so "-T" test markets settle against real price action.
+
 import { BN } from "@coral-xyz/anchor";
 import { SystemProgram } from "@solana/web3.js";
 
@@ -25,7 +30,9 @@ export interface OracleUpdateResult {
  * Run one pass: fetch latest Hermes prices for each MAG7 ticker, post
  * `update_oracle` for each. We always write — the on-chain account just stores
  * the latest snapshot, so over-writing is harmless and keeps `publish_time`
- * fresh for `settle_market`.
+ * fresh for `settle_market`. After the MAG7 pass, each TEST_TICKER_MIRRORS
+ * pair re-posts the SOURCE ticker's just-fetched price under the TEST ticker
+ * (its own oracle PDA) — no extra Hermes round-trip.
  */
 export async function runOracleUpdaterOnce(): Promise<OracleUpdateResult[]> {
   let anchor;
@@ -73,11 +80,34 @@ export async function runOracleUpdaterOnce(): Promise<OracleUpdateResult[]> {
     }
   }
 
+  // -------- Test-ticker mirroring --------
+  // Reuse the SOURCE ticker's price from the Hermes map above (no refetch) and
+  // post it under the TEST ticker — the oracle PDA is seeded by the test
+  // ticker. Skip silently when the source price is unavailable.
+  let mirrored = 0;
+  for (const [testTicker, sourceTicker] of Object.entries(env.testTickerMirrors)) {
+    const price = prices.get(sourceTicker);
+    if (!price) continue;
+    try {
+      const result = await postOracleUpdate(anchor, config, testTicker, price);
+      results.push(result);
+      mirrored++;
+    } catch (err) {
+      const msg = errMsg(err);
+      log.error(
+        { ticker: testTicker, source: sourceTicker, err: msg },
+        "mirrored update_oracle failed",
+      );
+      results.push({ ticker: testTicker, status: "failed", reason: msg });
+    }
+  }
+
   log.info(
     {
       updated: results.filter((r) => r.status === "updated").length,
       skipped: results.filter((r) => r.status === "skipped").length,
       failed: results.filter((r) => r.status === "failed").length,
+      mirrored,
     },
     "oracle pass complete",
   );
